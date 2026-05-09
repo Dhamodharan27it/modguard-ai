@@ -8,18 +8,46 @@
   "menu": {
     "items": [
       {
-        "label": "Mop comments",
-        "description": "Remove this comment and all child comments. This might take a few seconds to run.",
-        "location": "comment",
-        "forUserType": "moderator",
-        "endpoint": "/internal/menu/mop-comment"
-      },
-      {
-        "label": "Mop post comments",
-        "description": "Remove all comments of this post. This might take a few seconds to run.",
+        "label": "⚡ Analyse with ModGuard AI",
+        "description": "Analyse this post for violations using AI",
         "location": "post",
         "forUserType": "moderator",
-        "endpoint": "/internal/menu/mop-post"
+        "endpoint": "/internal/menu/analyse-post"
+      },
+      {
+        "label": "⚡ Analyse with ModGuard AI",
+        "description": "Analyse this comment for violations using AI",
+        "location": "comment",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/analyse-comment"
+      },
+      {
+        "label": "✕ Remove Post",
+        "description": "Remove this post and issue a strike",
+        "location": "post",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/remove-post"
+      },
+      {
+        "label": "✕ Remove Comment",
+        "description": "Remove this comment and issue a strike",
+        "location": "comment",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/remove-comment"
+      },
+      {
+        "label": "✓ Approve Post",
+        "description": "Approve this post",
+        "location": "post",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/approve-post"
+      },
+      {
+        "label": "⚠ Escalate Post",
+        "description": "Escalate this post for senior review",
+        "location": "post",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/escalate-post"
       }
     ]
   },
@@ -27,14 +55,14 @@
     "mopComment": "/internal/form/mop-comment-submit",
     "mopPost": "/internal/form/mop-post-submit"
   },
-  "triggers": {
-    "onAppInstall": "/internal/triggers/on-app-install"
-  },
   "scripts": {
     "build": "vite build",
     "dev": "vite build --watch"
   },
   "permissions": {
     "reddit": true
+  },
+  "dev": {
+    "subreddit": "modguard_ai_dev"
   }
 }

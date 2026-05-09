@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { getContext } from '@devvit/web/server';
+import { redis, reddit, context as devvitContext } from '@devvit/web/server';
 import {
   analyseContent,
   getUserStrikes,
@@ -9,20 +9,17 @@ import {
 
 export const api = new Hono();
 
-//  Get full mod queue 
+// ─── Get full mod queue ───────────────────────────────────────────────────────
 
 api.get('/queue', async (c) => {
-  const context = getContext(c);
-
   try {
-    const queueRaw = await context.redis.get(
-      `modguard:queue:${context.subredditName}`
-    );
+    const subreddit = devvitContext.subredditName;
+    const queueRaw = await redis.get(`modguard:queue:${subreddit}`);
     const queue: string[] = queueRaw ? JSON.parse(queueRaw) : [];
 
     const items = await Promise.all(
       queue.map(async (id) => {
-        const raw = await context.redis.get(`modguard:analysis:${id}`);
+        const raw = await redis.get(`modguard:analysis:${id}`);
         return raw ? JSON.parse(raw) : null;
       })
     );
@@ -34,27 +31,18 @@ api.get('/queue', async (c) => {
   }
 });
 
-//  Analyse any post on demand 
+// ─── Analyse any post on demand ──────────────────────────────────────────────
 
 api.post('/analyse', async (c) => {
   const { postId } = await c.req.json();
-  const context = getContext(c);
 
   try {
-    const post = await context.reddit.getPostById(postId);
+    const post = await reddit.getPostById(postId);
     const author = post.authorName;
+    const strikeRecord = await getUserStrikes(author);
+    const analysis = analyseContent(post.body ?? post.title, post.title);
 
-    // Check existing strikes
-    const strikeRecord = await getUserStrikes(context, author);
-
-    // Run full detection engine
-    const analysis = analyseContent(
-      post.body ?? post.title,
-      post.title
-    );
-
-    // Store result
-    await context.redis.set(
+    await redis.set(
       `modguard:analysis:${postId}`,
       JSON.stringify({
         postId,
@@ -69,70 +57,47 @@ api.post('/analyse', async (c) => {
       })
     );
 
-    // Add to queue
-    await addToModQueue(context, postId);
-
+    await addToModQueue(postId);
     return c.json({ success: true, analysis, strikes: strikeRecord });
   } catch (error) {
     return c.json({ success: false, error: String(error) }, 500);
   }
 });
 
-//  Resolve item from queue 
+// ─── Resolve item from queue ──────────────────────────────────────────────────
 
 api.post('/resolve', async (c) => {
   const { itemId, action, author, reason } = await c.req.json();
-  const context = getContext(c);
 
   try {
-    const subreddit = context.subredditName;
-
-    
-    const queueRaw = await context.redis.get(`modguard:queue:${subreddit}`);
+    const subreddit = devvitContext.subredditName;
+    const queueRaw = await redis.get(`modguard:queue:${subreddit}`);
     const queue: string[] = queueRaw ? JSON.parse(queueRaw) : [];
     const updated = queue.filter((id) => id !== itemId);
-    await context.redis.set(
-      `modguard:queue:${subreddit}`,
-      JSON.stringify(updated)
-    );
+    await redis.set(`modguard:queue:${subreddit}`, JSON.stringify(updated));
 
-    // removed — add strike
     if (action === 'remove' || action === 'ban') {
       const { record, banInfo } = await addStrike(
-        context,
-        author,
-        reason,
-        'harassment',
-        itemId
+        author, reason, 'harassment', itemId
       );
-
-      // Alert 
       if (action === 'ban' || record.count >= 4) {
         await alertAllModerators(
-          context,
-          itemId,
-          author,
+          itemId, author,
           `Manual ${action} by moderator. Strike ${record.count}/5. ${banInfo.label} applied.`
         );
       }
     }
 
-    
     const logKey = `modguard:log:${subreddit}`;
-    const logRaw = await context.redis.get(logKey);
+    const logRaw = await redis.get(logKey);
     const logs: object[] = logRaw ? JSON.parse(logRaw) : [];
-
     logs.unshift({
-      itemId,
-      action,
-      author,
-      reason,
+      itemId, action, author, reason,
       timestamp: new Date().toISOString(),
-      moderator: context.userId,
+      moderator: devvitContext.userId,
       auto: false,
     });
-
-    await context.redis.set(logKey, JSON.stringify(logs.slice(0, 100)));
+    await redis.set(logKey, JSON.stringify(logs.slice(0, 100)));
 
     return c.json({ success: true });
   } catch (error) {
@@ -140,14 +105,12 @@ api.post('/resolve', async (c) => {
   }
 });
 
-// mod stats 
+// ─── Get mod stats ────────────────────────────────────────────────────────────
 
 api.get('/stats', async (c) => {
-  const context = getContext(c);
-
   try {
-    const logRaw = await context.redis.get(
-      `modguard:log:${context.subredditName}`
+    const logRaw = await redis.get(
+      `modguard:log:${devvitContext.subredditName}`
     );
     const logs: any[] = logRaw ? JSON.parse(logRaw) : [];
 
@@ -169,14 +132,12 @@ api.get('/stats', async (c) => {
   }
 });
 
-//  repeat offenders 
+// ─── Get repeat offenders ─────────────────────────────────────────────────────
 
 api.get('/offenders', async (c) => {
-  const context = getContext(c);
-
   try {
-    const logRaw = await context.redis.get(
-      `modguard:log:${context.subredditName}`
+    const logRaw = await redis.get(
+      `modguard:log:${devvitContext.subredditName}`
     );
     const logs: any[] = logRaw ? JSON.parse(logRaw) : [];
 
@@ -200,32 +161,26 @@ api.get('/offenders', async (c) => {
   }
 });
 
-//  user strike history 
+// ─── Get user strike history ──────────────────────────────────────────────────
 
 api.get('/strikes/:username', async (c) => {
   const username = c.req.param('username');
-  const context = getContext(c);
-
   try {
-    const record = await getUserStrikes(context, username);
+    const record = await getUserStrikes(username);
     return c.json({ success: true, record });
   } catch (error) {
     return c.json({ success: false, error: String(error) }, 500);
   }
 });
 
-//  Helper 
+// ─── Helper ───────────────────────────────────────────────────────────────────
 
-async function addToModQueue(
-  context: ReturnType<typeof getContext>,
-  itemId: string
-) {
-  const queueKey = `modguard:queue:${context.subredditName}`;
-  const existing = await context.redis.get(queueKey);
+async function addToModQueue(itemId: string) {
+  const queueKey = `modguard:queue:${devvitContext.subredditName}`;
+  const existing = await redis.get(queueKey);
   const queue: string[] = existing ? JSON.parse(existing) : [];
-
   if (!queue.includes(itemId)) {
     queue.unshift(itemId);
-    await context.redis.set(queueKey, JSON.stringify(queue.slice(0, 50)));
+    await redis.set(queueKey, JSON.stringify(queue.slice(0, 50)));
   }
 }

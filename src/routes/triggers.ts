@@ -1,31 +1,26 @@
 import { Hono } from 'hono';
-import { getContext } from '@devvit/web/server';
+import { redis, reddit, context as devvitContext } from '@devvit/web/server';
 import {
   analyseContent,
-  executeAutoAction,
   getUserStrikes,
+  executeAutoAction,
 } from '../core/nuke';
 
 export const triggers = new Hono();
 
-// Fires automatically when a POST is reported
+// ─── Post reported ────────────────────────────────────────────────────────────
+
 triggers.post('/post-reported', async (c) => {
   const { postId } = await c.req.json();
-  const context = getContext(c);
 
   try {
-    const post = await context.reddit.getPostById(postId);
+    const post = await reddit.getPostById(postId);
     const author = post.authorName;
 
-    const strikeRecord = await getUserStrikes(context, author);
+    const strikeRecord = await getUserStrikes(author);
+    const analysis = analyseContent(post.body ?? post.title, post.title);
 
-    const analysis = analyseContent(
-      post.body ?? post.title,
-      post.title
-    );
-
-    // Store analysis result in Redis
-    await context.redis.set(
+    await redis.set(
       `modguard:analysis:${postId}`,
       JSON.stringify({
         postId,
@@ -41,11 +36,10 @@ triggers.post('/post-reported', async (c) => {
       })
     );
 
-    // Add to mod queue
-    await addToModQueue(context, postId);
+    await addToModQueue(postId);
 
     if (analysis.autoAction) {
-      await executeAutoAction(context, postId, author, analysis, false);
+      await executeAutoAction(postId, author, analysis, false);
     }
 
     return c.json({ success: true, analysis });
@@ -54,19 +48,19 @@ triggers.post('/post-reported', async (c) => {
   }
 });
 
-// Fires automatically when a COMMENT is reported
+// ─── Comment reported ─────────────────────────────────────────────────────────
+
 triggers.post('/comment-reported', async (c) => {
   const { commentId } = await c.req.json();
-  const context = getContext(c);
 
   try {
-    const comment = await context.reddit.getCommentById(commentId);
+    const comment = await reddit.getCommentById(commentId);
     const author = comment.authorName;
 
-    const strikeRecord = await getUserStrikes(context, author);
+    const strikeRecord = await getUserStrikes(author);
     const analysis = analyseContent(comment.body);
 
-    await context.redis.set(
+    await redis.set(
       `modguard:analysis:${commentId}`,
       JSON.stringify({
         postId: commentId,
@@ -81,10 +75,10 @@ triggers.post('/comment-reported', async (c) => {
       })
     );
 
-    await addToModQueue(context, commentId);
+    await addToModQueue(commentId);
 
     if (analysis.autoAction) {
-      await executeAutoAction(context, commentId, author, analysis, true);
+      await executeAutoAction(commentId, author, analysis, true);
     }
 
     return c.json({ success: true, analysis });
@@ -93,19 +87,18 @@ triggers.post('/comment-reported', async (c) => {
   }
 });
 
-// Get full mod queue
-triggers.get('/queue', async (c) => {
-  const context = getContext(c);
+// ─── Get mod queue ────────────────────────────────────────────────────────────
 
+triggers.get('/queue', async (c) => {
   try {
-    const queueRaw = await context.redis.get(
-      `modguard:queue:${context.subredditName}`
+    const queueRaw = await redis.get(
+      `modguard:queue:${devvitContext.subredditName}`
     );
     const queue: string[] = queueRaw ? JSON.parse(queueRaw) : [];
 
     const items = await Promise.all(
       queue.map(async (id) => {
-        const raw = await context.redis.get(`modguard:analysis:${id}`);
+        const raw = await redis.get(`modguard:analysis:${id}`);
         return raw ? JSON.parse(raw) : null;
       })
     );
@@ -117,13 +110,12 @@ triggers.get('/queue', async (c) => {
   }
 });
 
-// Get mod stats
-triggers.get('/stats', async (c) => {
-  const context = getContext(c);
+// ─── Get mod stats ────────────────────────────────────────────────────────────
 
+triggers.get('/stats', async (c) => {
   try {
-    const logRaw = await context.redis.get(
-      `modguard:log:${context.subredditName}`
+    const logRaw = await redis.get(
+      `modguard:log:${devvitContext.subredditName}`
     );
     const logs: any[] = logRaw ? JSON.parse(logRaw) : [];
 
@@ -144,18 +136,57 @@ triggers.get('/stats', async (c) => {
   }
 });
 
-//  Helper 
 
-async function addToModQueue(
-  context: ReturnType<typeof getContext>,
-  itemId: string
-) {
-  const queueKey = `modguard:queue:${context.subredditName}`;
-  const existing = await context.redis.get(queueKey);
+// ─── App Install Trigger ──────────────────────────────────────────────────────
+
+triggers.post('/on-app-install', async (c) => {
+  try {
+    await redis.set(
+      `modguard:installed:${devvitContext.subredditName}`,
+      JSON.stringify({
+        installedAt: new Date().toISOString(),
+        subreddit: devvitContext.subredditName,
+        version: '1.0.0',
+      })
+    );
+
+    const mods = await reddit.getModerators({
+      subredditName: devvitContext.subredditName,
+    });
+
+    for await (const mod of mods) {
+      await reddit.sendPrivateMessage({
+        to: mod.username,
+        subject: `⚡ ModGuard AI installed in r/${devvitContext.subredditName}`,
+        text:
+          `ModGuard AI has been successfully installed!\n\n` +
+          `✅ AI violation detection active\n` +
+          `✅ Strike system enabled\n` +
+          `✅ Child safety protection on\n` +
+          `✅ Auto-removal for critical violations\n\n` +
+          `Your community is now protected by ModGuard AI.`,
+      });
+    }
+
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('Install trigger failed:', error);
+    return c.json({ success: false, error: String(error) }, 500);
+  }
+});
+
+
+
+// ─── Helper ───────────────────────────────────────────────────────────────────
+
+async function addToModQueue(itemId: string) {
+  const queueKey = `modguard:queue:${devvitContext.subredditName}`;
+  const existing = await redis.get(queueKey);
   const queue: string[] = existing ? JSON.parse(existing) : [];
 
   if (!queue.includes(itemId)) {
     queue.unshift(itemId);
-    await context.redis.set(queueKey, JSON.stringify(queue.slice(0, 50)));
+    await redis.set(queueKey, JSON.stringify(queue.slice(0, 50)));
   }
 }
+
