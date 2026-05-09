@@ -9,7 +9,7 @@ import { triggers } from './routes/triggers';
 const app = new Hono();
 const internal = new Hono();
 
-// ─── MUST be first — handles onAppInstall before anything else ────────────────
+//  MUST be first — handles onAppInstall before anything else 
 app.all('*', async (c, next) => {
   const path = new URL(c.req.url).pathname;
   console.log(`[ModGuard] ${c.req.method} ${path}`);
@@ -29,19 +29,19 @@ app.post('/internal/triggers/on-comment-report', (c) => {
   return c.json({ success: true });
 });
 
-// ─── Internal routes ──────────────────────────────────────────────────────────
+//  Internal routes 
 internal.route('/menu', menu);
 internal.route('/form', forms);
 internal.route('/triggers', triggers);
 
-// ─── API routes ───────────────────────────────────────────────────────────────
+//  API routes 
 app.route('/api', api);
 app.route('/internal', internal);
 
-// ─── Health check ─────────────────────────────────────────────────────────────
+//  Health check 
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
-// ─── Start server ─────────────────────────────────────────────────────────────
+//  Start server 
 serve({
   fetch: app.fetch,
   createServer,
