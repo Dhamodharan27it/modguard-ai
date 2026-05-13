@@ -1,3 +1,4 @@
+
 type Props = {
     queue: any[];
     selected: any;
@@ -19,13 +20,19 @@ type Props = {
     escalate: { color: '#D29922', bg: '#3D2E0A', border: '#D29922' },
     ban:      { color: '#BC8CFF', bg: '#2A1A3D', border: '#BC8CFF' },
   };
-  
+
   const actionIcons: Record<string, string> = {
     approve: '✓',
     remove: '✕',
     escalate: '⚠',
     ban: '⊘',
   };
+
+  const FALLBACK_SC = { color: '#3FB950', bg: '#1A3D1A', border: '#3FB95044' };
+  const FALLBACK_AS = { color: '#8B949E', bg: '#161B22', border: '#30363D' };
+
+  const getSC = (severity: string) => severityColors[severity] ?? FALLBACK_SC;
+  const getAS = (action: string) => actionStyle[action] ?? FALLBACK_AS;
   
   export function ModQueue({ queue, selected, onSelect, onAction }: Props) {
     return (
@@ -63,7 +70,7 @@ type Props = {
             </div>
           ) : (
             queue.map((item) => {
-              const sc = severityColors[item.severity] ?? severityColors.none;
+              const sc = getSC(item.severity);
               const isActive = selected?.postId === item.postId;
               return (
                 <div
@@ -156,7 +163,7 @@ type Props = {
   
               {/* Violation Card */}
               {(() => {
-                const sc = severityColors[selected.severity] ?? severityColors.none;
+                const sc = getSC(selected.severity);
                 return (
                   <div style={{
                     borderRadius: '8px',
@@ -281,8 +288,7 @@ type Props = {
                 paddingTop: '6px',
               }}>
                 {['approve', 'remove', 'escalate', 'ban'].map((action) => {
-                  const style = actionStyle[action];
-                  const isSuggested = selected.suggestedAction === action;
+                  const style = getAS(action);                  const isSuggested = selected.suggestedAction === action;
                   return (
                     <button
                       key={action}
@@ -302,7 +308,7 @@ type Props = {
                         transition: 'all 0.15s',
                       }}
                     >
-                      {actionIcons[action]} {action.toUpperCase()}
+                      {actionIcons[action] ?? action[0]} {action.toUpperCase()}
                       {isSuggested && (
                         <span style={{
                           fontSize: '8px',

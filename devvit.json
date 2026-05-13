@@ -9,28 +9,28 @@
     "items": [
       {
         "label": "⚡ Analyse with ModGuard AI",
-        "description": "Analyse this post for violations using AI",
+        "description": "AI auto-detects violation and takes action",
         "location": "post",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/analyse-post"
       },
       {
         "label": "⚡ Analyse with ModGuard AI",
-        "description": "Analyse this comment for violations using AI",
+        "description": "AI auto-detects violation and takes action",
         "location": "comment",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/analyse-comment"
       },
       {
         "label": "✕ Remove Post",
-        "description": "Remove this post and issue a strike",
+        "description": "Remove and issue a strike",
         "location": "post",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/remove-post"
       },
       {
         "label": "✕ Remove Comment",
-        "description": "Remove this comment and issue a strike",
+        "description": "Remove and issue a strike",
         "location": "comment",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/remove-comment"
@@ -44,10 +44,45 @@
       },
       {
         "label": "⚠ Escalate Post",
-        "description": "Escalate this post for senior review",
+        "description": "Escalate for senior review",
         "location": "post",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/escalate-post"
+      },
+      {
+        "label": "🔍 Scan All Posts with AI",
+        "description": "Bulk analyse entire subreddit queue with AI",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/scan-all"
+      },
+      {
+        "label": "📊 Open ModGuard Dashboard",
+        "description": "View full AI mod dashboard",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/open-dashboard"
+      },
+      {
+        "label": "🚨 Check Threat Level",
+        "description": "Predict incoming raids or attacks",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/predict-threat"
+      },
+      {
+        "label": "⚡ Deep Analyse Post (v2)",
+        "description": "Full AI pipeline: toxicity, hate, spam, scam, NSFW, context",
+        "location": "post",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/analyse-post-v2"
+      },
+      {
+        "label": "👁 Add to Watchlist",
+        "description": "Flag this user for extra scrutiny",
+        "location": "post",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/watchlist-add"
       }
     ]
   },
@@ -61,8 +96,5 @@
   },
   "permissions": {
     "reddit": true
-  },
-  "dev": {
-    "subreddit": "modguard_ai_dev"
   }
 }

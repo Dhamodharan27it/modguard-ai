@@ -1,5 +1,4 @@
 {
-  "$schema": "https://json.schemastore.org/tsconfig.json",
   "compilerOptions": {
     "composite": true,
     "allowUnreachableCode": false,
@@ -7,7 +6,7 @@
     "exactOptionalPropertyTypes": true,
     "forceConsistentCasingInFileNames": true,
     "noImplicitOverride": true,
-    "types": ["node"],
+    "types": ["node", "react", "react-dom"],
     "noUncheckedIndexedAccess": true,
     "noUncheckedSideEffectImports": true,
     "noUnusedLocals": true,
@@ -22,6 +21,10 @@
     "skipDefaultLibCheck": true,
     "sourceMap": true,
     "target": "ES2022",
+    "jsx": "react-jsx",
+    "paths": {
+      "@devvit/start/client": ["./src/client/devvit-start-client-shim.ts"]
+    },
     "outDir": "dist/types",
     "tsBuildInfoFile": "dist/types/tsconfig.tsbuildinfo"
   },
