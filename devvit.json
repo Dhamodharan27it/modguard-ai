@@ -8,9 +8,7 @@
   "post": {
     "entrypoints": {
       "default": {
-        "entry": "main.tsx",
-        "height": "tall",
-        "inline": true
+        "entry": "main.tsx"
       }
     }
   },
