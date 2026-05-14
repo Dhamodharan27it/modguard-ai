@@ -11,11 +11,6 @@
         "entry": "main.tsx",
         "height": "tall",
         "inline": true
-      },
-      "dashboard": {
-        "entry": "main.tsx",
-        "height": "tall",
-        "inline": true
       }
     }
   },
