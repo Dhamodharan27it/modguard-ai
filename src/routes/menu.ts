@@ -482,14 +482,12 @@ menu.post('/open-dashboard', async (c) => {
       : '✅';
 
     return c.json<UiResponse>({
-      navigateTo: `https://reddit.com/r/${devvitContext.subredditName}/modguard-ai`,
-      showToast: `📊 Opening dashboard... Health: ${health.score}% | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()}`,
+      showToast: `📊 ModGuard Dashboard Ready | Health: ${health.score}% | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | View from the app menu`,
     }, 200);
   } catch (error) {
     console.error('[ModGuard] Dashboard error:', error);
     return c.json<UiResponse>({
-      navigateTo: `https://reddit.com/r/${devvitContext.subredditName}/modguard-ai`,
-      showToast: `📊 Dashboard opening...`,
+      showToast: `📊 ModGuard Dashboard Ready`,
     }, 200);
   }
 });
