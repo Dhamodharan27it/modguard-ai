@@ -457,13 +457,23 @@ menu.post('/scan-all', async (c) => {
   }
 });
 
-// ─── Open Dashboard (Health Score) ───────────────────────────────────────────
+// ─── Open Dashboard ───────────────────────────────────────────────────────────
 
 menu.post('/open-dashboard', async (c) => {
   try {
-    const health = await getCommunityHealthScore(devvitContext.subredditName);
+    const [health, threat] = await Promise.all([
+      getCommunityHealthScore(devvitContext.subredditName),
+      predictThreat(devvitContext.subredditName),
+    ]);
+
+    const threatEmoji = threat.threatLevel === 'imminent' ? '🚨'
+      : threat.threatLevel === 'high' ? '⚠️'
+      : threat.threatLevel === 'elevated' ? '📊'
+      : '✅';
+
     return c.json<UiResponse>({
-      showToast: `📊 Community Health: ${health.score}% Grade: ${health.grade} — ${health.summary}`
+      navigateTo: `/r/${devvitContext.subredditName}/modguard-ai/dashboard`,
+      showToast: `📊 Health: ${health.score}% (${health.grade}) | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | Queue ready`,
     }, 200);
   } catch (error) {
     return c.json<UiResponse>({ showToast: `Failed: ${String(error)}` }, 200);
