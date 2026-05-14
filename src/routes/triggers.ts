@@ -6,12 +6,44 @@ import {
   executeAutoAction,
 } from '../core/nuke';
 
+type JsonRecord = Record<string, unknown>;
+
+function extractPostIdFromTrigger(body: JsonRecord): string | undefined {
+  if (typeof body.postId === 'string') return body.postId;
+  const pr = body.postReport as JsonRecord | undefined;
+  const post = (pr?.post ?? body.post) as JsonRecord | undefined;
+  const id = post?.id;
+  return typeof id === 'string' ? id : undefined;
+}
+
+function extractCommentIdFromTrigger(body: JsonRecord): string | undefined {
+  if (typeof body.commentId === 'string') return body.commentId;
+  const cr = body.commentReport as JsonRecord | undefined;
+  const comment = (cr?.comment ?? body.comment) as JsonRecord | undefined;
+  const id = comment?.id;
+  return typeof id === 'string' ? id : undefined;
+}
+
+function toPostFullname(id: string): `t3_${string}` {
+  return (id.startsWith('t3_') ? id : `t3_${id}`) as `t3_${string}`;
+}
+
+function toCommentFullname(id: string): `t1_${string}` {
+  return (id.startsWith('t1_') ? id : `t1_${id}`) as `t1_${string}`;
+}
+
 export const triggers = new Hono();
 
 // ─── Post reported ────────────────────────────────────────────────────────────
 
 triggers.post('/post-reported', async (c) => {
-  const { postId } = await c.req.json();
+  const body = (await c.req.json()) as JsonRecord;
+  const rawId = extractPostIdFromTrigger(body);
+  if (!rawId) {
+    console.error('[ModGuard] post-reported: missing post id', JSON.stringify(body));
+    return c.json({ success: false, error: 'missing post id' }, 400);
+  }
+  const postId = toPostFullname(rawId);
 
   try {
     const post = await reddit.getPostById(postId);
@@ -51,7 +83,13 @@ triggers.post('/post-reported', async (c) => {
 // ─── Comment reported ─────────────────────────────────────────────────────────
 
 triggers.post('/comment-reported', async (c) => {
-  const { commentId } = await c.req.json();
+  const body = (await c.req.json()) as JsonRecord;
+  const rawId = extractCommentIdFromTrigger(body);
+  if (!rawId) {
+    console.error('[ModGuard] comment-reported: missing comment id', JSON.stringify(body));
+    return c.json({ success: false, error: 'missing comment id' }, 400);
+  }
+  const commentId = toCommentFullname(rawId);
 
   try {
     const comment = await reddit.getCommentById(commentId);

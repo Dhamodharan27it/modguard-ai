@@ -1,26 +1,21 @@
 {
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
   "name": "modguard-ai",
   "server": {
     "dir": "dist/server",
     "entry": "index.cjs"
   },
-  "subreddit": {
-    "entrypoints": {
-      "dashboard": {
-        "entry": "main.tsx",
-        "height": "tall"
-      }
-    }
-  },
   "post": {
     "entrypoints": {
       "default": {
         "entry": "main.tsx",
-        "height": "tall"
+        "height": "tall",
+        "inline": true
       },
       "dashboard": {
         "entry": "main.tsx",
-        "height": "tall"
+        "height": "tall",
+        "inline": true
       }
     }
   },
@@ -102,8 +97,20 @@
         "location": "post",
         "forUserType": "moderator",
         "endpoint": "/internal/menu/watchlist-add"
+      },
+      {
+        "label": "📊 Open ModGuard Dashboard",
+        "description": "View full AI mod dashboard (from this post)",
+        "location": "post",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/open-dashboard"
       }
     ]
+  },
+  "triggers": {
+    "onAppInstall": "/internal/triggers/on-app-install",
+    "onPostReport": "/internal/triggers/post-reported",
+    "onCommentReport": "/internal/triggers/comment-reported"
   },
   "forms": {
     "mopComment": "/internal/form/mop-comment-submit",
@@ -114,6 +121,10 @@
     "dev": "vite build --watch"
   },
   "permissions": {
-    "reddit": true
+    "reddit": {
+      "enable": true,
+      "scope": "moderator"
+    },
+    "redis": true
   }
 }

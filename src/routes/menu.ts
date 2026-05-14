@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { UiResponse } from '@devvit/web/shared';
+import { EntrypointHeight } from '@devvit/protos/json/reddit/devvit/post/v1/post.js';
 import { redis, reddit, context as devvitContext } from '@devvit/web/server';
 import {
   analyseContent,
@@ -20,6 +21,59 @@ import {
   addToWatchlist,
   addModNote,
 } from '../core/nuke';
+
+/** One custom post per subreddit hosts the Devvit Web dashboard (real Reddit URL). */
+const dashboardPostRedisKey = (subredditName: string) =>
+  `modguard:dashboard_post:${subredditName}`;
+
+function absoluteRedditUrlFromPost(post: { url: string; permalink: string }): string {
+  const raw = post.url?.trim() ?? '';
+  if (raw && /^https?:\/\//i.test(raw)) {
+    return new URL(raw).href;
+  }
+  const path = post.permalink.startsWith('/') ? post.permalink : `/${post.permalink}`;
+  return new URL(path, 'https://www.reddit.com').href;
+}
+
+async function getOrCreateDashboardPost(subredditName: string) {
+  const key = dashboardPostRedisKey(subredditName);
+  const storedId = await redis.get(key);
+  if (storedId) {
+    try {
+      const fullname = (storedId.startsWith('t3_')
+        ? storedId
+        : `t3_${storedId}`) as `t3_${string}`;
+      const existing = await reddit.getPostById(fullname);
+      if (existing && !existing.removed) {
+        return existing;
+      }
+    } catch {
+      // stale id — create a new dashboard post
+    }
+  }
+
+  const post = await reddit.submitCustomPost({
+    subredditName,
+    title: 'ModGuard AI — moderator dashboard',
+    entry: 'default',
+    textFallback: {
+      text: 'This post opens the ModGuard AI dashboard for moderators.',
+    },
+    styles: {
+      height: EntrypointHeight.TALL,
+      backgroundColor: '#00000000',
+      backgroundColorDark: '#0D1117FF',
+    },
+  });
+
+  await redis.set(key, post.id);
+  try {
+    await post.sticky(1);
+  } catch (e) {
+    console.warn('[ModGuard] Could not sticky dashboard post:', e);
+  }
+  return post;
+}
 
 export const menu = new Hono();
 
@@ -481,8 +535,12 @@ menu.post('/open-dashboard', async (c) => {
       : threat.threatLevel === 'elevated' ? '📊'
       : '✅';
 
+    const sub = devvitContext.subredditName;
+    const dashboardPost = await getOrCreateDashboardPost(sub);
+    const dashboardUrl = absoluteRedditUrlFromPost(dashboardPost);
     return c.json<UiResponse>({
-      showToast: `📊 ModGuard Dashboard Ready | Health: ${health.score}% | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | View from the app menu`,
+      navigateTo: dashboardUrl,
+      showToast: `📊 Health: ${health.score}% (${health.grade}) | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | Opening dashboard`,
     }, 200);
   } catch (error) {
     console.error('[ModGuard] Dashboard error:', error);

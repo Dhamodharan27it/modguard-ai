@@ -22,9 +22,7 @@
     "sourceMap": true,
     "target": "ES2022",
     "jsx": "react-jsx",
-    "paths": {
-      "@devvit/start/client": ["./src/client/devvit-start-client-shim.ts"]
-    },
+    "paths": {},
     "outDir": "dist/types",
     "tsBuildInfoFile": "dist/types/tsconfig.tsbuildinfo"
   },

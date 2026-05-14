@@ -16,19 +16,6 @@ app.all('*', async (c, next) => {
   await next();
 });
 
-app.post('/internal/triggers/on-app-install', (c) => {
-  console.log('[ModGuard] onAppInstall called!');
-  return c.json({ success: true });
-});
-
-app.post('/internal/triggers/on-post-report', (c) => {
-  return c.json({ success: true });
-});
-
-app.post('/internal/triggers/on-comment-report', (c) => {
-  return c.json({ success: true });
-});
-
 //  Internal routes 
 internal.route('/menu', menu);
 internal.route('/form', forms);
