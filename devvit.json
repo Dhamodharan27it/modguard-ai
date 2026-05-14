@@ -1,9 +1,28 @@
 {
-  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
   "name": "modguard-ai",
   "server": {
     "dir": "dist/server",
     "entry": "index.cjs"
+  },
+  "subreddit": {
+    "entrypoints": {
+      "dashboard": {
+        "entry": "main.tsx",
+        "height": "tall"
+      }
+    }
+  },
+  "post": {
+    "entrypoints": {
+      "default": {
+        "entry": "main.tsx",
+        "height": "tall"
+      },
+      "dashboard": {
+        "entry": "main.tsx",
+        "height": "tall"
+      }
+    }
   },
   "menu": {
     "items": [
