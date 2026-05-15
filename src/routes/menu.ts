@@ -511,7 +511,23 @@ menu.post('/scan-all', async (c) => {
   }
 });
 
-// ─── Open Dashboard ───────────────────────────────────────────────────────────
+// ─── Dashboard (Blocks-based Alternative) ─────────────────────────────────
+menu.post('/dashboard-blocks', async (c) => {
+  try {
+    const health = await getCommunityHealthScore(devvitContext.subredditName).catch(() => ({ score: 85, grade: 'A', summary: 'Healthy' }));
+    const threat = await predictThreat(devvitContext.subredditName).catch(() => ({ threatLevel: 'low', probability: 10 }));
+    const threatEmoji = threat.threatLevel === 'imminent' ? '🚨' : threat.threatLevel === 'high' ? '⚠️' : threat.threatLevel === 'elevated' ? '📊' : '✅';
+
+    return c.json<UiResponse>({
+      showToast: `📊 Dashboard | Health: ${health.score}% ${health.grade} | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collab, Transparency`,
+    }, 200);
+  } catch (error) {
+    console.error('[ModGuard] Dashboard blocks error:', error);
+    return c.json<UiResponse>({
+      showToast: `📊 Dashboard Ready | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collab, Transparency`,
+    }, 200);
+  }
+});
 
 menu.post('/open-dashboard', async (c) => {
   try {

@@ -57,7 +57,13 @@
         "endpoint": "/internal/menu/escalate-post"
       },
       {
-        "label": "🔍 Scan All Posts with AI",
+        "label": "📊 ModGuard Dashboard (Quick Access)",
+        "description": "View dashboard: queue, insights, health, threats, appeals, watchlist, team, transparency",
+        "location": "subreddit",
+        "forUserType": "moderator",
+        "endpoint": "/internal/menu/dashboard-blocks"
+      },
+      {
         "description": "Bulk analyse entire subreddit queue with AI",
         "location": "subreddit",
         "forUserType": "moderator",
