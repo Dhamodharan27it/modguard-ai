@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "module": "CommonJS",
+    "target": "ES2022",
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "outDir": "dist/server",
+    "rootDir": "src",
+    "sourceMap": false,
+    "isolatedModules": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitOverride": false,
+    "noUncheckedIndexedAccess": false,
+    "noUncheckedSideEffectImports": false
+  },
+  "include": ["src/index.ts", "src/routes/**/*", "src/core/**/*"],
+  "exclude": ["node_modules"]
+}

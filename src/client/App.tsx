@@ -1,6 +1,37 @@
 import { useState, useEffect, useCallback } from 'react';
 
+// ─── Animations (simple, safe) ───────────────────────────────────────────────
+function ensureKeyframes() {
+  if (typeof document === 'undefined') return;
+  const id = 'modguard-animations';
+  if (document.getElementById(id)) return;
+
+  const style = document.createElement('style');
+  style.id = id;
+  style.textContent = `
+    @keyframes mg-pulse {
+      0% { transform: scale(1); opacity: 0.95; }
+      50% { transform: scale(1.35); opacity: 1; }
+      100% { transform: scale(1); opacity: 0.9; }
+    }
+    @keyframes mg-glow {
+      0% { box-shadow: 0 0 0 rgba(255,69,0,0.0); }
+      50% { box-shadow: 0 0 18px rgba(255,69,0,0.35); }
+      100% { box-shadow: 0 0 0 rgba(255,69,0,0.0); }
+    }
+    @keyframes mg-slideIn {
+      from { transform: translateY(10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    .mg-anim-pulse { animation: mg-pulse 1s infinite; }
+    .mg-anim-glow { animation: mg-glow 1.5s infinite; }
+    .mg-anim-slideIn { animation: mg-slideIn 220ms ease-out both; }
+  `;
+  document.head.appendChild(style);
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
+
 
 type AnalysisItem = {
   postId: string; type: string; author: string; title?: string; content: string;
@@ -229,8 +260,13 @@ export function App() {
     await fetchTabData('collab');
   }
 
+  useEffect(() => {
+    ensureKeyframes();
+  }, []);
+
   useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 30000); return () => clearInterval(iv); }, [fetchAll]);
   useEffect(() => { fetchTabData(tab); }, [tab, fetchTabData]);
+
 
   if (loading) {
     return (
@@ -262,8 +298,8 @@ export function App() {
 
         {/* Threat indicator */}
         {threat && threat.threat.threatLevel !== 'none' && (
-          <div style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: threatColor, background: '#1C2128', border: `1px solid ${threatColor}44`, borderRadius: 6, padding: '3px 8px' }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: threatColor, animation: 'pulse 1s infinite' }} />
+          <div className="mg-anim-glow" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: threatColor, background: '#1C2128', border: `1px solid ${threatColor}44`, borderRadius: 6, padding: '3px 8px' }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: threatColor }} className="mg-anim-pulse" />
             THREAT: {threat.threat.threatLevel.toUpperCase()} ({threat.threat.probability}%)
           </div>
         )}
@@ -378,7 +414,7 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
           const isc = SEV[item.severity] ?? SEV['none']!;
           const isActive = selected?.postId === item.postId;
           return (
-            <div key={item.postId} onClick={() => setSelected(item)} style={{ padding: '9px 12px', borderBottom: '1px solid #30363D', borderLeft: `2px solid ${isActive ? '#FF4500' : 'transparent'}`, background: isActive ? '#1C2128' : 'transparent', cursor: 'pointer' }}>
+            <div key={item.postId} className="mg-anim-slideIn" onClick={() => setSelected(item)} style={{ padding: '9px 12px', borderBottom: '1px solid #30363D', borderLeft: `2px solid ${isActive ? '#FF4500' : 'transparent'}`, background: isActive ? '#1C2128' : 'transparent', cursor: 'pointer' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                 <div style={{ fontSize: 11, color: '#FF4500', fontWeight: 500 }}>{item.author}</div>
                 {item.riskScore !== undefined && (

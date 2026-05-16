@@ -326,6 +326,7 @@ export async function getUserRiskScore(
   username: string
 ): Promise<{ score: number; level: string; reason: string }> {
   try {
+
     const strikes = await getUserStrikes(username);
     let score = 0;
     score += strikes.count * 15;
@@ -387,6 +388,7 @@ export async function updateEmotionalTemperature(subredditName: string, severity
 export async function getEmotionalTemperature(
   subredditName: string
 ): Promise<{ temperature: number; status: string; warning: string | null }> {
+
   try {
     const key = `modguard:emotional:${subredditName}`;
     const raw = await redis.get(key);
@@ -589,3 +591,99 @@ export async function executeAutoAction(
 
 export { predictThreat, getSlowModeRecommendation } from './riskEngine';
 export { generateWeeklyInsights, generateTransparencyReport, getTimeline, addTimelineEvent, getAppeals, resolveAppeal, submitAppeal, getWatchlist, addToWatchlist, getModNotes, addModNote, getCollabAlerts, createCollabAlert, getModeratorPreferences, saveModeratorPreferences } from './memory';
+
+export type BehaviorDNA = {
+  username: string;
+  dnaScore: number; // 0-1000
+  riskPrediction48h: { probability: number; label: string };
+  peakRiskBand: string;
+  patternTrajectory: { from: string; to: string; trend: 'rising' | 'steady' | 'falling' };
+  triggerWords: string[];
+  evasionAttempts: number;
+  triggeredCategories: string[];
+  trustLevel: string;
+  raidLink: { coordinatedRisk: number; recommendedShield: boolean };
+};
+
+function hourBandFromPercent(pct: number): string {
+  // Deterministic mapping: 0-100 -> 00-22 (2-hour bands)
+  const bandIndex = Math.max(0, Math.min(10, Math.floor((pct / 100) * 10)));
+  const start = bandIndex * 2;
+  const end = (start + 2) % 24;
+  const fmt = (h: number) => `${((h + 11) % 12) + 1}${h < 12 ? 'AM' : 'PM'}`;
+  return `${fmt(start)}-${fmt(end)}`;
+}
+
+export async function getBehaviorDNA(username: string): Promise<BehaviorDNA> {
+  const strikes = await getUserStrikes(username);
+  const risk = await getUserRiskScore(username);
+
+  const categories = strikes.history.map(h => h.category);
+  const triggeredCategories = Array.from(new Set(categories)).slice(0, 6);
+
+  const countsByCat: Record<string, number> = {};
+  for (const c of categories) countsByCat[c] = (countsByCat[c] ?? 0) + 1;
+  const topCat = Object.entries(countsByCat).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const recentCat = strikes.history[0]?.category;
+
+  const patternTrajectory = {
+    from: (recentCat && topCat && recentCat !== topCat) ? recentCat : (recentCat ?? 'clean'),
+    to: topCat ?? 'clean',
+    trend:
+      strikes.count >= 3 ? 'rising' :
+      strikes.count === 2 ? 'steady' :
+      'falling',
+  } as BehaviorDNA['patternTrajectory'];
+
+  // Heuristic trigger words (derived from top categories)
+  const triggerMap: Record<string, string[]> = {
+    spam: ['promo', 'discount', 'dm me', 'click here'],
+    harassment: ['kys', 'worthless', 'you idiot', 'go die'],
+    toxicity: ['hate', 'trash', 'idiot'],
+    hate_speech: ['subhuman', 'slur', 'ethnic cleansing'],
+    scam: ['wallet', 'airdrop', 'send funds', 'investment'],
+    adult_content: ['nsfw', 'explicit', 'nude'],
+    drugs: ['buy meth', 'fentanyl', 'cocaine'],
+    doxxing: ['address', 'phone number', 'ssn'],
+    dark_web: ['.onion', 'tor browser', 'dark web'],
+    violence: ['i will kill you', 'bomb threat', 'shoot'],
+    misinformation: ['government is lying', 'truth they hide', 'vaccines cause'],
+    leaked_content: ['leaked', 'unreleased', 'early access'],
+    child_safety: ['jailbait', 'minor nude', 'send nudes minor'],
+    coordinated_attack: ['raid', 'bot', 'spam wave'],
+    clean: ['none'],
+  };
+
+  const triggerWords = topCat ? (triggerMap[topCat] ?? ['violation']) : ['violation'];
+
+  // Heuristic evasion attempts: if evasionDetected existed in any history is not stored.
+  // We approximate using high risk + multi-category history.
+  const categoryDiversity = triggeredCategories.length;
+  const evasionAttempts = Math.min(10, Math.max(0, Math.round((risk.score / 20) + (categoryDiversity - 1))));
+
+  const probability48hRaw = Math.min(100, Math.round(risk.score * 0.85 + strikes.count * 3));
+  const probability48h = strikes.count === 0 ? Math.min(20, Math.round(risk.score * 0.4)) : probability48hRaw;
+  const label = probability48h >= 70 ? 'HIGH' : probability48h >= 40 ? 'MEDIUM' : 'LOW';
+
+  // Peak risk band tied to risk score (deterministic)
+  const peakRiskBand = hourBandFromPercent(risk.score);
+
+  const dnaScore = Math.max(0, Math.min(1000, Math.round(probability48h * 10 + risk.score * 2 - strikes.count * 5)));
+
+  // Raid link (reuse existing coordinated signals threshold semantics)
+  const coordinatedRisk = Math.min(100, Math.round(risk.score * 0.6 + strikes.count * 4));
+
+  return {
+    username,
+    dnaScore,
+    riskPrediction48h: { probability: probability48h, label },
+    peakRiskBand,
+    patternTrajectory,
+    triggerWords: triggerWords.slice(0, 10),
+    evasionAttempts,
+    triggeredCategories,
+    trustLevel: risk.level,
+    raidLink: { coordinatedRisk, recommendedShield: coordinatedRisk >= 70 },
+  };
+}
+

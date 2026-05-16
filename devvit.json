@@ -3,12 +3,12 @@
   "name": "modguard-ai",
   "server": {
     "dir": "dist/server",
-    "entry": "index.cjs"
+    "entry": "index.js"
   },
   "post": {
     "entrypoints": {
       "default": {
-        "entry": "main.tsx"
+        "entry": "src/client/main.tsx"
       }
     }
   },
@@ -64,6 +64,7 @@
         "endpoint": "/internal/menu/dashboard-blocks"
       },
       {
+        "label": "⚡ Scan All Posts",
         "description": "Bulk analyse entire subreddit queue with AI",
         "location": "subreddit",
         "forUserType": "moderator",
@@ -116,8 +117,8 @@
     "mopPost": "/internal/form/mop-post-submit"
   },
   "scripts": {
-    "build": "vite build",
-    "dev": "vite build --watch"
+    "build": "npm run build:client && npm run build:server",
+    "dev": "npm run build:server && vite build --watch"
   },
   "permissions": {
     "reddit": {

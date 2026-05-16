@@ -25,13 +25,24 @@ import {
   getCommunityHealthScore,
   getEmotionalTemperature,
   getBehaviorDNA,
-} from '../core/nuke';
+} from '../../core/nuke';
+
+
 
 
 export const api = new Hono();
 
-// ─── Mod Queue ────────────────────────────────────────────────────────────────
+async function addToModQueue(itemId: string) {
+  const queueKey = `modguard:queue:${devvitContext.subredditName}`;
+  const existing = await redis.get(queueKey);
+  const queue: string[] = existing ? JSON.parse(existing) : [];
+  if (!queue.includes(itemId)) {
+    queue.unshift(itemId);
+    await redis.set(queueKey, JSON.stringify(queue.slice(0, 50)));
+  }
+}
 
+// Mod Queue
 api.get('/queue', async (c) => {
   try {
     const subreddit = devvitContext.subredditName;
@@ -50,22 +61,26 @@ api.get('/queue', async (c) => {
   }
 });
 
-// ─── Analyse on demand (v2 full pipeline) ────────────────────────────────────
-
+// Analyse on demand
 api.post('/analyse', async (c) => {
   const { postId } = await c.req.json();
   try {
     const post = await reddit.getPostById(postId);
     const author = post.authorName;
     const analysis = await analyseContentFull(post.body ?? post.title, post.title, author);
-    await redis.set(`modguard:analysis:${postId}`, JSON.stringify({
-      postId, type: 'post', author,
-      title: post.title,
-      content: post.body ?? post.title,
-      subreddit: post.subredditName,
-      createdAt: new Date().toISOString(),
-      ...analysis,
-    }));
+    await redis.set(
+      `modguard:analysis:${postId}`,
+      JSON.stringify({
+        postId,
+        type: 'post',
+        author,
+        title: post.title,
+        content: post.body ?? post.title,
+        subreddit: post.subredditName,
+        createdAt: new Date().toISOString(),
+        ...analysis,
+      })
+    );
     await addToModQueue(postId);
     return c.json({ success: true, analysis });
   } catch (error) {
@@ -73,15 +88,14 @@ api.post('/analyse', async (c) => {
   }
 });
 
-// ─── Resolve queue item ───────────────────────────────────────────────────────
-
+// Resolve queue item
 api.post('/resolve', async (c) => {
   const { itemId, action, author, reason } = await c.req.json();
   try {
     const subreddit = devvitContext.subredditName;
     const queueRaw = await redis.get(`modguard:queue:${subreddit}`);
     const queue: string[] = queueRaw ? JSON.parse(queueRaw) : [];
-    await redis.set(`modguard:queue:${subreddit}`, JSON.stringify(queue.filter(id => id !== itemId)));
+    await redis.set(`modguard:queue:${subreddit}`, JSON.stringify(queue.filter((id: string) => id !== itemId)));
 
     if (action === 'remove' || action === 'ban') {
       const { record, banInfo } = await addStrike(author, reason, 'harassment', itemId);
@@ -101,8 +115,7 @@ api.post('/resolve', async (c) => {
   }
 });
 
-// ─── Behaviour DNA ──────────────────────────────────────────────────────────
-
+// Behaviour DNA
 api.get('/dna/:username', async (c) => {
   const username = c.req.param('username');
   try {
@@ -113,25 +126,21 @@ api.get('/dna/:username', async (c) => {
   }
 });
 
-// ─── Stats ────────────────────────────────────────────────────────────────────
-
+// Stats
 api.get('/stats', async (c) => {
-
   try {
     const logRaw = await redis.get(`modguard:log:${devvitContext.subredditName}`);
-    const logs: {
-      action: string; auto?: boolean; severity?: string;
-    }[] = logRaw ? JSON.parse(logRaw) : [];
+    const logs: { action: string; auto?: boolean; severity?: string }[] = logRaw ? JSON.parse(logRaw) : [];
     return c.json({
       success: true,
       stats: {
         totalActioned: logs.length,
-        totalRemoved: logs.filter(l => l.action === 'removed' || l.action === 'auto_removed').length,
-        totalApproved: logs.filter(l => l.action === 'approved' || l.action === 'auto_approved').length,
-        totalEscalated: logs.filter(l => l.action === 'escalated' || l.action === 'auto_escalated').length,
-        totalBanned: logs.filter(l => l.action === 'ban').length,
-        autoRemoved: logs.filter(l => l.auto === true).length,
-        criticalAlerts: logs.filter(l => l.severity === 'critical').length,
+        totalRemoved: logs.filter((l) => l.action === 'removed' || l.action === 'auto_removed').length,
+        totalApproved: logs.filter((l) => l.action === 'approved' || l.action === 'auto_approved').length,
+        totalEscalated: logs.filter((l) => l.action === 'escalated' || l.action === 'auto_escalated').length,
+        totalBanned: logs.filter((l) => l.action === 'ban').length,
+        autoRemoved: logs.filter((l) => l.auto === true).length,
+        criticalAlerts: logs.filter((l) => l.severity === 'critical').length,
         recentActions: logs.slice(0, 10),
       },
     });
@@ -140,15 +149,17 @@ api.get('/stats', async (c) => {
   }
 });
 
-// ─── Repeat Offenders ─────────────────────────────────────────────────────────
-
+// Offenders
 api.get('/offenders', async (c) => {
   try {
     const logRaw = await redis.get(`modguard:log:${devvitContext.subredditName}`);
     const logs: { action: string; author?: string }[] = logRaw ? JSON.parse(logRaw) : [];
     const offenderMap: Record<string, number> = {};
-    logs.filter(l => l.action === 'removed' || l.action === 'ban' || l.action === 'auto_removed')
-      .forEach(l => { if (l.author) offenderMap[l.author] = (offenderMap[l.author] ?? 0) + 1; });
+    logs
+      .filter((l) => l.action === 'removed' || l.action === 'ban' || l.action === 'auto_removed')
+      .forEach((l) => {
+        if (l.author) offenderMap[l.author] = (offenderMap[l.author] ?? 0) + 1;
+      });
     const offenders = Object.entries(offenderMap)
       .map(([username, count]) => ({ username, violations: count }))
       .sort((a, b) => b.violations - a.violations)
@@ -159,8 +170,7 @@ api.get('/offenders', async (c) => {
   }
 });
 
-// ─── User Strikes ─────────────────────────────────────────────────────────────
-
+// Strikes
 api.get('/strikes/:username', async (c) => {
   const username = c.req.param('username');
   try {
@@ -173,8 +183,7 @@ api.get('/strikes/:username', async (c) => {
   }
 });
 
-// ─── Threat Prediction ────────────────────────────────────────────────────────
-
+// Threat Prediction
 api.get('/threat', async (c) => {
   try {
     const threat = await predictThreat(devvitContext.subredditName);
@@ -185,8 +194,7 @@ api.get('/threat', async (c) => {
   }
 });
 
-// ─── Community Health ─────────────────────────────────────────────────────────
-
+// Community health
 api.get('/health', async (c) => {
   try {
     const health = await getCommunityHealthScore(devvitContext.subredditName);
@@ -197,8 +205,7 @@ api.get('/health', async (c) => {
   }
 });
 
-// ─── AI Timeline ──────────────────────────────────────────────────────────────
-
+// Timeline
 api.get('/timeline', async (c) => {
   try {
     const limitParam = c.req.query('limit');
@@ -210,8 +217,7 @@ api.get('/timeline', async (c) => {
   }
 });
 
-// ─── Weekly Insights ──────────────────────────────────────────────────────────
-
+// Weekly insights
 api.get('/insights', async (c) => {
   try {
     const insights = await generateWeeklyInsights(devvitContext.subredditName);
@@ -221,8 +227,7 @@ api.get('/insights', async (c) => {
   }
 });
 
-// ─── Transparency Report ──────────────────────────────────────────────────────
-
+// Transparency
 api.get('/transparency', async (c) => {
   try {
     const report = await generateTransparencyReport(devvitContext.subredditName);
@@ -232,8 +237,7 @@ api.get('/transparency', async (c) => {
   }
 });
 
-// ─── Appeals ─────────────────────────────────────────────────────────────────
-
+// Appeals
 api.get('/appeals', async (c) => {
   try {
     const statusParam = c.req.query('status') as 'pending' | 'approved' | 'rejected' | undefined;
@@ -265,8 +269,7 @@ api.post('/appeals/:id/resolve', async (c) => {
   }
 });
 
-// ─── Watchlist ────────────────────────────────────────────────────────────────
-
+// Watchlist
 api.get('/watchlist', async (c) => {
   try {
     const list = await getWatchlist();
@@ -286,8 +289,7 @@ api.post('/watchlist', async (c) => {
   }
 });
 
-// ─── Mod Notes ────────────────────────────────────────────────────────────────
-
+// Notes
 api.get('/notes/:username', async (c) => {
   const username = c.req.param('username');
   try {
@@ -309,8 +311,7 @@ api.post('/notes/:username', async (c) => {
   }
 });
 
-// ─── Collaboration Alerts ─────────────────────────────────────────────────────
-
+// Collab
 api.get('/collab', async (c) => {
   try {
     const alerts = await getCollabAlerts();
@@ -330,8 +331,7 @@ api.post('/collab', async (c) => {
   }
 });
 
-// ─── Moderator Preferences ────────────────────────────────────────────────────
-
+// Preferences
 api.get('/prefs', async (c) => {
   try {
     const modId = devvitContext.userId ?? 'unknown';
@@ -354,14 +354,3 @@ api.post('/prefs', async (c) => {
   }
 });
 
-// ─── Helper ───────────────────────────────────────────────────────────────────
-
-async function addToModQueue(itemId: string) {
-  const queueKey = `modguard:queue:${devvitContext.subredditName}`;
-  const existing = await redis.get(queueKey);
-  const queue: string[] = existing ? JSON.parse(existing) : [];
-  if (!queue.includes(itemId)) {
-    queue.unshift(itemId);
-    await redis.set(queueKey, JSON.stringify(queue.slice(0, 50)));
-  }
-}

@@ -26,7 +26,12 @@ import {
 const dashboardPostRedisKey = (subredditName: string) =>
   `modguard:dashboard_post:${subredditName}`;
 
+void absoluteRedditUrlFromPost;
+
 function absoluteRedditUrlFromPost(post: { url: string; permalink: string }): string {
+
+
+
   const raw = post.url?.trim() ?? '';
   if (raw && /^https?:\/\//i.test(raw)) {
     return new URL(raw).href;
@@ -35,7 +40,12 @@ function absoluteRedditUrlFromPost(post: { url: string; permalink: string }): st
   return new URL(path, 'https://www.reddit.com').href;
 }
 
+void getOrCreateDashboardPost;
+
 async function getOrCreateDashboardPost(subredditName: string) {
+
+
+
   const key = dashboardPostRedisKey(subredditName);
   const storedId = await redis.get(key);
   if (storedId) {
@@ -525,43 +535,6 @@ menu.post('/dashboard-blocks', async (c) => {
     console.error('[ModGuard] Dashboard blocks error:', error);
     return c.json<UiResponse>({
       showToast: `📊 Dashboard Ready | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collab, Transparency`,
-    }, 200);
-  }
-});
-
-menu.post('/open-dashboard', async (c) => {
-  try {
-    let health = { score: 75, grade: 'B' };
-    let threat = { threatLevel: 'low', probability: 10 };
-
-    try {
-      health = await getCommunityHealthScore(devvitContext.subredditName);
-    } catch (e) {
-      console.error('[ModGuard] Health score error:', e);
-    }
-
-    try {
-      threat = await predictThreat(devvitContext.subredditName);
-    } catch (e) {
-      console.error('[ModGuard] Threat prediction error:', e);
-    }
-
-    const threatEmoji = threat.threatLevel === 'imminent' ? '🚨'
-      : threat.threatLevel === 'high' ? '⚠️'
-      : threat.threatLevel === 'elevated' ? '📊'
-      : '✅';
-
-    const sub = devvitContext.subredditName;
-    const dashboardPost = await getOrCreateDashboardPost(sub);
-    const dashboardUrl = absoluteRedditUrlFromPost(dashboardPost);
-    return c.json<UiResponse>({
-      navigateTo: dashboardUrl,
-      showToast: `📊 Health: ${health.score}% (${health.grade}) | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | Opening dashboard`,
-    }, 200);
-  } catch (error) {
-    console.error('[ModGuard] Dashboard error:', error);
-    return c.json<UiResponse>({
-      showToast: `📊 ModGuard Dashboard Ready`,
     }, 200);
   }
 });

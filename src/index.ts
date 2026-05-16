@@ -1,10 +1,14 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { createServer, getServerPort } from '@devvit/web/server';
-import { api } from './routes/api';
-import { forms } from './routes/forms';
-import { menu } from './routes/menu';
-import { triggers } from './routes/triggers';
+import { api } from './routes/api/index';
+import { forms } from './routes/forms/forms';
+import { menu } from './routes/menu/index';
+
+
+
+import { triggers } from './routes/triggers/triggers';
+
 
 const app = new Hono();
 const internal = new Hono();
@@ -18,6 +22,8 @@ app.all('*', async (c, next) => {
 
 //  Internal routes 
 internal.route('/menu', menu);
+
+
 internal.route('/form', forms);
 internal.route('/triggers', triggers);
 
