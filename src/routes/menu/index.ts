@@ -1,13 +1,20 @@
 import { Hono } from 'hono';
-import { menu } from '../menu';
+import { analyseMenu } from './analyse';
+import { moderationMenu } from './moderation';
+import { dashboardMenu } from './dashboard';
+import { threatMenu } from './threat';
+import { copilotMenu } from './copilot';
+import { scanMenu } from './scan';
 
-// Temporary: keep existing monolithic menu during refactor.
-// Next commits will split into analyse/moderation/dashboard/threat/copilot/scan modules.
+export const menu = new Hono();
 
-const router = new Hono();
-router.route('/', menu);
+menu.route('/', analyseMenu);
+menu.route('/', moderationMenu);
+menu.route('/', dashboardMenu);
+menu.route('/', threatMenu);
+menu.route('/', copilotMenu);
+menu.route('/', scanMenu);
 
-export { menu };
 
 
 

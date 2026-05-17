@@ -6,11 +6,19 @@
     "entry": "index.js"
   },
   "post": {
+    "dir": "dist",
     "entrypoints": {
       "default": {
-        "entry": "src/client/main.tsx"
+        "entry": "index.html"
       }
     }
+  },
+  "permissions": {
+    "reddit": {
+      "enable": true,
+      "scope": "moderator"
+    },
+    "redis": true
   },
   "menu": {
     "items": [
@@ -115,16 +123,7 @@
   "forms": {
     "mopComment": "/internal/form/mop-comment-submit",
     "mopPost": "/internal/form/mop-post-submit"
-  },
-  "scripts": {
-    "build": "npm run build:client && npm run build:server",
-    "dev": "npm run build:server && vite build --watch"
-  },
-  "permissions": {
-    "reddit": {
-      "enable": true,
-      "scope": "moderator"
-    },
-    "redis": true
   }
+  
+  
 }
