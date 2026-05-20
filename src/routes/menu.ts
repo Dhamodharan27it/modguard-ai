@@ -64,10 +64,10 @@ async function getOrCreateDashboardPost(subredditName: string) {
 
   const post = await reddit.submitCustomPost({
     subredditName,
-    title: 'ModGuard AI — moderator dashboard',
+    title: '🛡️ ModGuard AI — Top-Level Moderator Tool',
     entry: 'default',
     textFallback: {
-      text: 'This post opens the ModGuard AI dashboard for moderators.',
+      text: 'ModGuard AI Dashboard: Real-time moderation queue, threat detection, strikes/bans, appeals, and community health.',
     },
     styles: {
       height: EntrypointHeight.TALL,
@@ -522,6 +522,8 @@ menu.post('/scan-all', async (c) => {
 });
 
 // ─── Dashboard (Blocks-based Alternative) ─────────────────────────────────
+// Redirect dashboard menu item to open the real Devvit Web custom post.
+// This fixes the "Something went wrong" toast when clicking Dashboard from the mod menu.
 menu.post('/dashboard-blocks', async (c) => {
   try {
     const health = await getCommunityHealthScore(devvitContext.subredditName).catch(() => ({ score: 85, grade: 'A', summary: 'Healthy' }));

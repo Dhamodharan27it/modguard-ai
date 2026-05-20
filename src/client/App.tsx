@@ -223,12 +223,18 @@ export function App() {
       else if (action === 'ban') endpoint = '/internal/menu/ban-user';
       if (action !== 'ban') body = { ...body, postId: selected.postId, reason: selected.removalMessage ?? selected.violation };
       else body = { ...body, username: selected.author, reason: selected.violation, days: '0' };
-      await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      
+      const actionRes = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const actionData = await actionRes.json();
+      
       await fetch('/api/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId: selected.postId, action, author: selected.author, reason: selected.violation }) });
-      showToast(`✅ ${action.toUpperCase()} completed for u/${selected.author}`);
+      
+      showToast(actionData.showToast || `✅ ${action.toUpperCase()} completed for u/${selected.author}`);
       setSelected(null);
       await fetchAll();
-    } catch { showToast('❌ Action failed'); }
+    } catch (e) { 
+      showToast(`❌ Action failed: ${String(e)?.slice(0, 40)}`); 
+    }
     finally { setActing(false); }
   }
 
@@ -417,6 +423,11 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
             <div key={item.postId} className="mg-anim-slideIn" onClick={() => setSelected(item)} style={{ padding: '9px 12px', borderBottom: '1px solid #30363D', borderLeft: `2px solid ${isActive ? '#FF4500' : 'transparent'}`, background: isActive ? '#1C2128' : 'transparent', cursor: 'pointer' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                 <div style={{ fontSize: 11, color: '#FF4500', fontWeight: 500 }}>{item.author}</div>
+                {item.existingStrikes > 0 && (
+                  <div style={{ fontSize: 8, padding: '1px 4px', borderRadius: 3, background: '#F85149', color: '#0D1117', fontWeight: 600 }}>
+                    {item.existingStrikes}⚠
+                  </div>
+                )}
                 {item.riskScore !== undefined && (
                   <div style={{ fontSize: 9, color: item.riskScore >= 60 ? '#F85149' : '#8B949E' }}>R:{item.riskScore}</div>
                 )}
@@ -449,7 +460,7 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
               )}
             </div>
 
-            {/* Violation Card */}
+            {/* Violation Card with Strike Warning */}
             <div style={{ borderRadius: 8, padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', background: sc.bg, border: `1px solid ${sc.border}44` }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 9, color: '#8B949E', marginBottom: 4, letterSpacing: 1 }}>DETECTED VIOLATION</div>
@@ -462,7 +473,18 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
                   </div>
                 )}
                 {selected.existingStrikes > 0 && (
-                  <div style={{ fontSize: 10, color: '#F85149', marginTop: 5 }}>⚠️ {selected.existingStrikes} prior strikes</div>
+                  <div style={{ 
+                    fontSize: 10, 
+                    color: '#F85149', 
+                    marginTop: 8,
+                    padding: '6px 8px',
+                    background: '#3D1A1A',
+                    borderRadius: 4,
+                    border: '1px solid #F85149',
+                    fontWeight: 500
+                  }}>
+                    ⚠️ {selected.existingStrikes} STRIKE{selected.existingStrikes !== 1 ? 'S' : ''}/5 — {5 - selected.existingStrikes} remaining
+                  </div>
                 )}
                 {selected.contextNote && (
                   <div style={{ fontSize: 10, color: '#D29922', marginTop: 4 }}>💡 {selected.contextNote}</div>
@@ -508,11 +530,25 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
             {/* Content */}
             <div style={card({ fontSize: 12, lineHeight: 1.7 })}>{selected.content}</div>
 
-            {/* Removal Message */}
+            {/* Removal Message - Responsive Widget */}
             {selected.removalMessage && (
               <div>
-                <div style={{ fontSize: 9, color: '#8B949E', letterSpacing: 1.5, marginBottom: 5 }}>AUTO-GENERATED REMOVAL MESSAGE</div>
-                <div style={{ background: '#1C2128', border: '1px dashed #30363D', borderRadius: 8, padding: '9px 13px', fontSize: 11, color: '#8B949E', lineHeight: 1.6 }}>{selected.removalMessage}</div>
+                <div style={{ fontSize: 9, color: '#8B949E', letterSpacing: 1.5, marginBottom: 5 }}>🔔 USER NOTIFICATION MESSAGE</div>
+                <div style={{ 
+                  background: '#1C2128', 
+                  border: '1px solid #30363D', 
+                  borderRadius: 8, 
+                  padding: '12px 13px', 
+                  fontSize: 11, 
+                  color: '#E6EDF3', 
+                  lineHeight: 1.6,
+                  wordWrap: 'break-word',
+                  overflowWrap: 'break-word',
+                  maxHeight: 'auto',
+                  minHeight: '40px'
+                }}>
+                  {selected.removalMessage}
+                </div>
               </div>
             )}
 

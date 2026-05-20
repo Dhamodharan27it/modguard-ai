@@ -6,15 +6,22 @@ import { getCommunityHealthScore, predictThreat } from '../../core/nuke';
 
 export const dashboardMenu = new Hono();
 
+// Devvit Web dashboard opening.
+// NOTE: the mod menu item currently calls /internal/menu/dashboard-blocks.
+// This endpoint returns a toast. The actual Web UI is loaded by the post created in src/routes/menu.ts.
+// If you also need a direct post-opening endpoint, create it here.
+
 dashboardMenu.post('/dashboard-blocks', async (c) => {
   try {
-    const health = await getCommunityHealthScore(devvitContext.subredditName).catch(() => ({
+    const subreddit = devvitContext.subredditName;
+    
+    const health = await getCommunityHealthScore(subreddit).catch(() => ({
       score: 85,
       grade: 'A',
       summary: 'Healthy',
     }));
 
-    const threat = await predictThreat(devvitContext.subredditName).catch(() => ({
+    const threat = await predictThreat(subreddit).catch(() => ({
       threatLevel: 'low',
       probability: 10,
     }));
@@ -29,11 +36,11 @@ dashboardMenu.post('/dashboard-blocks', async (c) => {
             : '✅';
 
     return c.json<UiResponse>({
-      showToast: `📊 Dashboard | Health: ${health.score}% ${health.grade} | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collab, Transparency`,
+      showToast: `📊 Dashboard Ready | Health: ${health.score}% ${health.grade} | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | Mode: Top-Level Moderator Tool | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collaboration`,
     }, 200);
   } catch (error) {
     return c.json<UiResponse>({
-      showToast: `📊 Dashboard Ready | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collab, Transparency`,
+      showToast: `📊 Dashboard Ready | Mode: Top-Level Moderator Tool | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collaboration`,
     }, 200);
   }
 });

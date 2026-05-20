@@ -12,6 +12,7 @@ menu.route('/', analyseMenu);
 menu.route('/', moderationMenu);
 menu.route('/', dashboardMenu);
 menu.route('/', threatMenu);
+
 menu.route('/', copilotMenu);
 menu.route('/', scanMenu);
 

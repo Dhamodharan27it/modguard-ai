@@ -14,9 +14,12 @@ moderationMenu.post('/remove-post', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const postId = body.postId ?? body.targetId ?? devvitContext.postId;
     const reason = body.reason ?? 'Removed for violating community rules.';
-    if (!postId) return c.json<UiResponse>({ showToast: 'No post ID found' }, 200);
+    
+    if (!postId) return c.json<UiResponse>({ showToast: '❌ No post ID found' }, 200);
 
     const post = await reddit.getPostById(postId);
+    if (!post || !post.authorName) return c.json<UiResponse>({ showToast: '❌ Post not found' }, 200);
+    
     const author = post.authorName;
     await post.remove();
 
@@ -25,12 +28,12 @@ moderationMenu.post('/remove-post', async (c) => {
 
     await reddit.sendPrivateMessage({
       to: author,
-      subject: `Your post was removed from r/${devvitContext.subredditName}`,
-      text: `${reason}\n\nStrike ${record.count}/5. Ban: ${banInfo.label}\n\n${record.count >= 4 ? 'WARNING: One more = permanent ban.' : 'Please follow community rules.'}\n\nRisk Score: ${riskScore.score}/100`,
+      subject: `🚫 Your post was removed from r/${devvitContext.subredditName}`,
+      text: `${reason}\n\n⚠️ STRIKE ${record.count}/5\n📛 Ban Duration: ${banInfo.label}${banInfo.permanent ? ' [PERMANENT]' : ''}\n\n${record.count >= 4 ? '🚨 WARNING: One more strike = PERMANENT BAN!' : '📌 Please follow community guidelines.'}\n\n📊 Risk Score: ${riskScore.score}/100 (${riskScore.level})`,
     });
 
     if (record.count >= 4 || banInfo.permanent) {
-      await alertAllModerators(postId, author, `Manual remove. Strike ${record.count}/5. Risk: ${riskScore.score}/100`);
+      await alertAllModerators(postId, author, `🔴 CRITICAL STRIKE: ${record.count}/5. Ban: ${banInfo.label}. Risk: ${riskScore.level}`);
     }
 
     await updateEmotionalTemperature(devvitContext.subredditName, 'high');
@@ -50,11 +53,10 @@ moderationMenu.post('/remove-post', async (c) => {
     await removeFromQueue(postId);
 
     return c.json<UiResponse>({
-      showToast: `✕ Removed! Strike ${record.count}/5 → u/${author} | Ban: ${banInfo.label}${banInfo.permanent ? ' PERMANENT!' : ''} | Risk: ${riskScore.score}/100`,
+      showToast: `✕ POST REMOVED! ⚠️ Strike ${record.count}/5 | 📛 ${banInfo.label}${banInfo.permanent ? ' [PERMANENT]' : ''} | 🔴 Risk: ${riskScore.level}`,
     }, 200);
   } catch (error) {
-    console.error('[ModGuard] remove-post error:', error);
-    return c.json<UiResponse>({ showToast: `Remove failed: ${String(error)}` }, 200);
+    return c.json<UiResponse>({ showToast: `❌ Remove failed: ${String(error)?.slice(0, 50)}` }, 200);
   }
 });
 
@@ -65,22 +67,26 @@ moderationMenu.post('/remove-comment', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const commentId = body.commentId ?? body.targetId ?? devvitContext.commentId;
     const reason = body.reason ?? 'Removed for violating community rules.';
-    if (!commentId) return c.json<UiResponse>({ showToast: 'No comment ID found' }, 200);
+    
+    if (!commentId) return c.json<UiResponse>({ showToast: '❌ No comment ID found' }, 200);
 
     const comment = await reddit.getCommentById(commentId);
+    if (!comment || !comment.authorName) return c.json<UiResponse>({ showToast: '❌ Comment not found' }, 200);
+    
     const author = comment.authorName;
     await comment.remove();
 
     const { record, banInfo } = await addStrike(author, reason, 'harassment', commentId);
+    const riskScore = await getUserRiskScore(author);
 
     await reddit.sendPrivateMessage({
       to: author,
-      subject: `Your comment was removed from r/${devvitContext.subredditName}`,
-      text: `${reason}\n\nStrike ${record.count}/5. Ban: ${banInfo.label}`,
+      subject: `🚫 Your comment was removed from r/${devvitContext.subredditName}`,
+      text: `${reason}\n\n⚠️ STRIKE ${record.count}/5\n📛 Ban Duration: ${banInfo.label}${banInfo.permanent ? ' [PERMANENT]' : ''}\n\n${record.count >= 4 ? '🚨 WARNING: One more strike = PERMANENT BAN!' : '📌 Please follow community guidelines.'}\n\n📊 Risk Score: ${riskScore.score}/100 (${riskScore.level})`,
     });
 
     if (record.count >= 4 || banInfo.permanent) {
-      await alertAllModerators(commentId, author, `Strike ${record.count}/5.`);
+      await alertAllModerators(commentId, author, `🔴 CRITICAL STRIKE: ${record.count}/5. Ban: ${banInfo.label}. Risk: ${riskScore.level}`);
     }
 
     await updateEmotionalTemperature(devvitContext.subredditName, 'medium');
@@ -94,17 +100,17 @@ moderationMenu.post('/remove-comment', async (c) => {
       strikeCount: record.count,
       banApplied: banInfo.label,
       permanent: banInfo.permanent,
+      riskScore: riskScore.score,
       auto: false,
     });
 
     await removeFromQueue(commentId);
 
     return c.json<UiResponse>({
-      showToast: `✕ Comment removed! Strike ${record.count}/5 → u/${author} | Ban: ${banInfo.label}`,
+      showToast: `✕ COMMENT REMOVED! ⚠️ Strike ${record.count}/5 | 📛 ${banInfo.label}${banInfo.permanent ? ' [PERMANENT]' : ''} | 🔴 Risk: ${riskScore.level}`,
     }, 200);
   } catch (error) {
-    console.error('[ModGuard] remove-comment error:', error);
-    return c.json<UiResponse>({ showToast: `Remove failed: ${String(error)}` }, 200);
+    return c.json<UiResponse>({ showToast: `❌ Remove failed: ${String(error)?.slice(0, 50)}` }, 200);
   }
 });
 
@@ -114,9 +120,12 @@ moderationMenu.post('/approve-post', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const postId = body.postId ?? body.targetId ?? devvitContext.postId;
-    if (!postId) return c.json<UiResponse>({ showToast: 'No post ID found' }, 200);
+    
+    if (!postId) return c.json<UiResponse>({ showToast: '❌ No post ID found' }, 200);
 
     const post = await reddit.getPostById(postId);
+    if (!post) return c.json<UiResponse>({ showToast: '❌ Post not found' }, 200);
+    
     await post.approve();
 
     await logAction({
@@ -131,7 +140,7 @@ moderationMenu.post('/approve-post', async (c) => {
     await removeFromQueue(postId);
     return c.json<UiResponse>({ showToast: '✓ Post approved!' }, 200);
   } catch (error) {
-    return c.json<UiResponse>({ showToast: `Approve failed: ${String(error)}` }, 200);
+    return c.json<UiResponse>({ showToast: `❌ Approve failed: ${String(error)?.slice(0, 50)}` }, 200);
   }
 });
 
@@ -142,10 +151,13 @@ moderationMenu.post('/escalate-post', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const postId = body.postId ?? body.targetId ?? devvitContext.postId;
     const reason = body.reason ?? 'Escalated for senior review.';
-    if (!postId) return c.json<UiResponse>({ showToast: 'No post ID found' }, 200);
+    
+    if (!postId) return c.json<UiResponse>({ showToast: '❌ No post ID found' }, 200);
 
     const post = await reddit.getPostById(postId);
-    await alertAllModerators(postId, post.authorName, `Escalated: ${reason}`);
+    if (!post) return c.json<UiResponse>({ showToast: '❌ Post not found' }, 200);
+    
+    await alertAllModerators(postId, post.authorName, `🔼 ESCALATED: ${reason}`);
 
     await logAction({
       itemId: postId,
@@ -159,7 +171,7 @@ moderationMenu.post('/escalate-post', async (c) => {
     await removeFromQueue(postId);
     return c.json<UiResponse>({ showToast: '⚠️ Escalated to senior moderators!' }, 200);
   } catch (error) {
-    return c.json<UiResponse>({ showToast: `Escalate failed: ${String(error)}` }, 200);
+    return c.json<UiResponse>({ showToast: `❌ Escalate failed: ${String(error)?.slice(0, 50)}` }, 200);
   }
 });
 
@@ -167,15 +179,21 @@ moderationMenu.post('/escalate-post', async (c) => {
 
 moderationMenu.post('/ban-user', async (c) => {
   try {
-    const { username, reason, days } = await c.req.json();
+    const body = await c.req.json().catch(() => ({}));
+    const { username, reason, days } = body;
+    
+    if (!username) return c.json<UiResponse>({ showToast: '❌ No username provided' }, 200);
+    
+    const parsedDays = days ? parseInt(String(days)) : 0;
+    
     await reddit.banUser({
       subredditName: devvitContext.subredditName,
       username,
       reason,
-      duration: days ?? 0,
-      message: days === 0
-        ? `Permanently banned. Reason: ${reason}`
-        : `Banned for ${days} days. Reason: ${reason}`,
+      duration: parsedDays,
+      message: parsedDays === 0
+        ? `🚫 PERMANENT BAN\n\nReason: ${reason}\n\nYou have been permanently banned from this community.`
+        : `⏱️ TEMPORARY BAN (${parsedDays} days)\n\nReason: ${reason}\n\nYou are banned for ${parsedDays} day${parsedDays !== 1 ? 's' : ''}.`,
     });
 
     await logAction({
@@ -183,13 +201,15 @@ moderationMenu.post('/ban-user', async (c) => {
       action: 'ban',
       author: username,
       reason,
-      permanent: days === 0,
+      permanent: parsedDays === 0,
       auto: false,
     });
 
-    return c.json<UiResponse>({ showToast: `⊘ u/${username} banned!` }, 200);
+    return c.json<UiResponse>({ 
+      showToast: `🚫 u/${username} BANNED! ${parsedDays === 0 ? '[PERMANENT]' : `[${parsedDays}d]`}` 
+    }, 200);
   } catch (error) {
-    return c.json<UiResponse>({ showToast: `Ban failed: ${String(error)}` }, 200);
+    return c.json<UiResponse>({ showToast: `❌ Ban failed: ${String(error)?.slice(0, 50)}` }, 200);
   }
 });
 
