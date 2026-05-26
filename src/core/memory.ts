@@ -6,6 +6,11 @@ import { redis, context as devvitContext } from '@devvit/web/server';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+type FeedbackItem = {
+  id: string; itemId: string; action: string; correct: boolean; category?: string;
+  note: string; username: string; timestamp: string; triggeredDetectors: string[];
+};
+
 export type AttackPattern = {
   id: string;
   subreddit: string;
@@ -33,6 +38,56 @@ export type MemoryInsight = {
   message: string;
   confidence: number;
   relatedId?: string;
+};
+
+export type Appeal = {
+  id: string;
+  username: string;
+  postId: string;
+  reason: string;
+  submittedAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
+};
+
+export type TimelineEvent = {
+  timestamp: string;
+  type: 'detection' | 'action' | 'alert' | 'system' | 'threat' | 'slow_mode';
+  message: string;
+  severity: 'info' | 'warning' | 'critical';
+  actor?: string;
+  auto: boolean;
+};
+
+export type WatchlistEntry = {
+  username: string;
+  reason: string;
+  addedBy: string;
+  addedAt: string;
+  alertOnActivity: boolean;
+};
+
+export type CollabAlert = {
+  id: string;
+  type: 'note' | 'warning' | 'escalation' | 'discussion';
+  message: string;
+  targetUser?: string | undefined;
+  targetPostId?: string | undefined;
+  createdBy: string;
+  createdAt: string;
+  resolved: boolean;
+  replies: { author: string; message: string; at: string }[];
+};
+
+export type ModNote = {
+  id: string;
+  username: string;
+  note: string;
+  addedBy: string;
+  addedAt: string;
+  pinned: boolean;
 };
 
 // ─── Attack Pattern Memory ────────────────────────────────────────────────────
@@ -123,16 +178,7 @@ export async function saveModeratorPreferences(
   await redis.set(key, JSON.stringify(prefs));
 }
 
-// ─── Moderator Notes ──────────────────────────────────────────────────────────
-
-export type ModNote = {
-  id: string;
-  username: string;
-  note: string;
-  addedBy: string;
-  addedAt: string;
-  pinned: boolean;
-};
+// ─── Moderator Notes ────────────────────────────────────────────────────────
 
 export async function addModNote(username: string, note: string): Promise<ModNote> {
   const key = `modguard:notes:${devvitContext.subredditName}:${username}`;
@@ -160,14 +206,6 @@ export async function getModNotes(username: string): Promise<ModNote[]> {
 }
 
 // ─── Watchlist ────────────────────────────────────────────────────────────────
-
-export type WatchlistEntry = {
-  username: string;
-  reason: string;
-  addedBy: string;
-  addedAt: string;
-  alertOnActivity: boolean;
-};
 
 export async function addToWatchlist(username: string, reason: string): Promise<void> {
   const key = `modguard:watchlist:${devvitContext.subredditName}`;
@@ -200,18 +238,6 @@ export async function getWatchlist(): Promise<WatchlistEntry[]> {
 }
 
 // ─── Moderator Collaboration: Shared Alerts ───────────────────────────────────
-
-export type CollabAlert = {
-  id: string;
-  type: 'note' | 'warning' | 'escalation' | 'discussion';
-  message: string;
-  targetUser?: string | undefined;
-  targetPostId?: string | undefined;
-  createdBy: string;
-  createdAt: string;
-  resolved: boolean;
-  replies: { author: string; message: string; at: string }[];
-};
 
 export async function createCollabAlert(
   type: CollabAlert['type'],
@@ -247,15 +273,6 @@ export async function getCollabAlerts(): Promise<CollabAlert[]> {
 }
 
 // ─── AI Timeline ──────────────────────────────────────────────────────────────
-
-export type TimelineEvent = {
-  timestamp: string;
-  type: 'detection' | 'action' | 'alert' | 'system' | 'threat' | 'slow_mode';
-  message: string;
-  severity: 'info' | 'warning' | 'critical';
-  actor?: string;
-  auto: boolean;
-};
 
 export async function addTimelineEvent(event: Omit<TimelineEvent, 'timestamp'>): Promise<void> {
   const key = `modguard:timeline:${devvitContext.subredditName}`;
@@ -364,18 +381,6 @@ export async function generateWeeklyInsights(subredditName: string): Promise<Wee
 
 // ─── Appeal System ────────────────────────────────────────────────────────────
 
-export type Appeal = {
-  id: string;
-  username: string;
-  postId: string;
-  reason: string;
-  submittedAt: string;
-  status: 'pending' | 'approved' | 'rejected';
-  reviewedBy?: string;
-  reviewedAt?: string;
-  reviewNote?: string;
-};
-
 export async function submitAppeal(
   username: string,
   postId: string,
@@ -428,7 +433,7 @@ export async function resolveAppeal(
   }
 }
 
-// ─── Transparency Report ──────────────────────────────────────────────────────
+// ─── Transparency Report ─────────────────────────────────────────────────────
 
 export type TransparencyReport = {
   subreddit: string;
@@ -438,9 +443,12 @@ export type TransparencyReport = {
   humanActions: number;
   falsePositiveRate: number;
   appealSuccessRate: number;
-  topCategories: { category: string; count: number }[];
   moderationAccuracy: number;
   avgConfidence: number;
+  feedbackAccuracy: number;
+  totalFeedback: number;
+  feedbackByAction: Record<string, { total: number; correct: number; accuracy: number }>;
+  topCategories: { category: string; count: number }[];
 };
 
 export async function generateTransparencyReport(subredditName: string): Promise<TransparencyReport> {
@@ -455,6 +463,29 @@ export async function generateTransparencyReport(subredditName: string): Promise
 
   const appealsRaw = await redis.get(`modguard:appeals:${subredditName}`);
   const appeals: Appeal[] = appealsRaw ? JSON.parse(appealsRaw) : [];
+
+  // Get feedback stats
+  const feedbackRaw = await redis.get(`modguard:feedback:${subredditName}`);
+  const feedbackList: FeedbackItem[] = feedbackRaw ? JSON.parse(feedbackRaw) : [];
+  
+  const totalFeedback = feedbackList.length;
+  const correctFeedback = feedbackList.filter(f => f.correct).length;
+  const feedbackAccuracy = totalFeedback > 0 ? Math.round((correctFeedback / totalFeedback) * 100) : 0;
+  
+  // Group feedback by action
+  const feedbackByAction: Record<string, { total: number; correct: number; accuracy: number }> = {};
+  feedbackList.forEach(f => {
+    if (!feedbackByAction[f.action]) {
+      feedbackByAction[f.action] = { total: 0, correct: 0, accuracy: 0 };
+    }
+    feedbackByAction[f.action]!.total++;
+    if (f.correct) feedbackByAction[f.action]!.correct++;
+  });
+  
+  Object.keys(feedbackByAction).forEach(action => {
+    const stats = feedbackByAction[action]!;
+    stats.accuracy = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
+  });
 
   const autoActions = logs.filter(l => l.auto).length;
   const humanActions = logs.length - autoActions;
@@ -487,10 +518,81 @@ export async function generateTransparencyReport(subredditName: string): Promise
     totalActions: logs.length,
     autoActions,
     humanActions,
-    falsePositiveRate: appealSuccessRate,
+    falsePositiveRate: 100 - feedbackAccuracy, // Inverse of feedback accuracy
     appealSuccessRate,
-    topCategories,
     moderationAccuracy: Math.max(0, 100 - appealSuccessRate),
     avgConfidence,
+    feedbackAccuracy,
+    totalFeedback,
+    feedbackByAction,
+    topCategories,
   };
+}
+
+// ─── Detector Weights for Feedback-Based Tuning ────────────────────────────────
+
+export type DetectorWeights = {
+  toxicity: number;
+  hate_speech: number;
+  spam: number;
+  scam: number;
+  nsfw: number;
+  misinformation: number;
+};
+
+const DEFAULT_WEIGHTS: DetectorWeights = {
+  toxicity: 1.0,
+  hate_speech: 1.0,
+  spam: 1.0,
+  scam: 1.0,
+  nsfw: 1.0,
+  misinformation: 1.0,
+};
+
+export async function getDetectorWeights(subredditName: string): Promise<DetectorWeights> {
+  const key = `modguard:detector_weights:${subredditName}`;
+  const raw = await redis.get(key);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as DetectorWeights;
+    } catch {
+      return DEFAULT_WEIGHTS;
+    }
+  }
+  return DEFAULT_WEIGHTS;
+}
+
+export async function updateDetectorWeights(subredditName: string): Promise<void> {
+  try {
+    const feedbackRaw = await redis.get(`modguard:feedback:${subredditName}`);
+    const feedbackList: FeedbackItem[] = feedbackRaw ? JSON.parse(feedbackRaw) : [];
+
+    if (feedbackList.length < 5) return;
+
+    const weights = { ...DEFAULT_WEIGHTS };
+    const adjustments: Record<string, { correct: number; total: number }> = {};
+
+    for (const f of feedbackList) {
+      const category = f.category || 'toxicity';
+      if (!adjustments[category]) adjustments[category] = { correct: 0, total: 0 };
+      adjustments[category]!.total++;
+      if (f.correct) adjustments[category]!.correct++;
+    }
+
+    for (const [cat, stats] of Object.entries(adjustments)) {
+      const accuracy = stats.total > 0 ? stats.correct / stats.total : 0.5;
+      const key = cat as keyof typeof weights;
+      if (key in weights) {
+        if (accuracy >= 0.85) {
+          weights[key] = Math.min(2.0, weights[key] + 0.15);
+        } else if (accuracy <= 0.4) {
+          weights[key] = Math.max(0.2, weights[key] - 0.2);
+        }
+      }
+    }
+
+    await redis.set(`modguard:detector_weights:${subredditName}`, JSON.stringify(weights));
+  } catch (error) {
+    console.error('Failed to update detector weights:', error);
+  }
 }

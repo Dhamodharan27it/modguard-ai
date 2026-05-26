@@ -1,6 +1,18 @@
 import { Hono } from 'hono';
 import { redis, reddit, context as devvitContext } from '@devvit/web/server';
+import { verifyModerator, requireMod } from '../../middleware/modAuth';
+
+type FeedbackEntry = {
+  id: string; itemId: string; action: string; correct: boolean;
+  note: string; username: string; timestamp: string; triggeredDetectors: string[];
+};
+
+type LogEntry = {
+  action: string; auto?: boolean; severity?: string; author?: string; timestamp?: string;
+};
+
 import {
+  analyseContent,
   analyseContentFull,
   getUserStrikes,
   addStrike,
@@ -13,6 +25,7 @@ import {
   getTimeline,
   getAppeals,
   resolveAppeal,
+  updateDetectorWeights,
   submitAppeal,
   getWatchlist,
   addToWatchlist,
@@ -28,9 +41,28 @@ import {
 } from '../../core/nuke';
 
 
-
-
 export const api = new Hono();
+
+api.get('/auth/check', async (c) => {
+  const auth = await verifyModerator();
+  return c.json({
+    success: true,
+    isModerator: auth.isModerator,
+    username: auth.username,
+    subreddit: devvitContext.subredditName,
+  });
+});
+
+api.use('*', async (c, next) => {
+  if (c.req.path.endsWith('/auth/check')) {
+    await next();
+    return;
+  }
+  const auth = await verifyModerator();
+  const guard = requireMod(c, auth);
+  if (!guard.authorized) return guard.response;
+  await next();
+});
 
 async function addToModQueue(itemId: string) {
   const queueKey = `modguard:queue:${devvitContext.subredditName}`;
@@ -43,9 +75,12 @@ async function addToModQueue(itemId: string) {
 }
 
 // Mod Queue
+const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, none: 4 };
+
 api.get('/queue', async (c) => {
   try {
     const subreddit = devvitContext.subredditName;
+    const severityFilter = c.req.query('severity') ?? 'all';
     const queueRaw = await redis.get(`modguard:queue:${subreddit}`);
     const queue: string[] = queueRaw ? JSON.parse(queueRaw) : [];
     const items = await Promise.all(
@@ -54,8 +89,23 @@ api.get('/queue', async (c) => {
         return raw ? JSON.parse(raw) : null;
       })
     );
-    const pending = items.filter(Boolean);
-    return c.json({ success: true, queue: pending, total: pending.length });
+    let pending = items.filter(Boolean);
+
+    pending.sort((a, b) => {
+      const aOrder = SEVERITY_ORDER[a.severity] ?? 4;
+      const bOrder = SEVERITY_ORDER[b.severity] ?? 4;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return (b.confidence ?? 0) - (a.confidence ?? 0);
+    });
+
+    if (severityFilter !== 'all') {
+      pending = pending.filter(i => i.severity === severityFilter);
+    }
+
+    const counts = { critical: 0, high: 0, medium: 0, low: 0, none: 0 };
+    pending.forEach(i => { const s = i.severity as keyof typeof counts; if (s in counts) counts[s]++; });
+
+    return c.json({ success: true, queue: pending, total: pending.length, counts });
   } catch (error) {
     return c.json({ success: false, error: String(error) }, 500);
   }
@@ -354,3 +404,164 @@ api.post('/prefs', async (c) => {
   }
 });
 
+// FEEDBACK ENDPOINTS
+api.post('/feedback', async (c) => {
+  const { itemId, action, correct, note, username } = await c.req.json();
+  try {
+    // Validate input
+    if (!itemId || !action || correct === undefined) {
+      return c.json({ success: false, error: 'Missing required fields: itemId, action, correct' }, 400);
+    }
+
+    // Get the analysis for this item to see which detectors triggered
+    const analysisRaw = await redis.get(`modguard:analysis:${itemId}`);
+    let triggeredDetectors: string[] = [];
+    if (analysisRaw) {
+      const analysis = JSON.parse(analysisRaw);
+      triggeredDetectors = analysis.triggeredDetectors ?? [];
+    }
+
+    // Store feedback in Redis
+    const feedbackKey = `modguard:feedback:${devvitContext.subredditName}`;
+    const feedbackRaw = await redis.get(feedbackKey);
+    const feedbackList: FeedbackEntry[] = feedbackRaw ? JSON.parse(feedbackRaw) : [];
+
+    const feedbackEntry = {
+      id: `${itemId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      itemId,
+      action,
+      correct,
+      note: note ?? '',
+      username: username ?? 'anonymous',
+      timestamp: new Date().toISOString(),
+      triggeredDetectors, // Store which detectors were triggered for this item
+    };
+
+    feedbackList.push(feedbackEntry);
+    await redis.set(feedbackKey, JSON.stringify(feedbackList.slice(-1000))); // Keep last 1000 feedback entries
+
+    // Detector weights tuning is handled server-side in core (currently not wired here).
+    // Return success and allow background/cron jobs to process detector updates.
+
+    return c.json({ success: true, feedbackId: feedbackEntry.id });
+  } catch (error) {
+    return c.json({ success: false, error: String(error) }, 500);
+  }
+});
+
+api.get('/feedback/stats', async (c) => {
+  try {
+    const feedbackKey = `modguard:feedback:${devvitContext.subredditName}`;
+    const feedbackRaw = await redis.get(feedbackKey);
+    const feedbackList: FeedbackEntry[] = feedbackRaw ? JSON.parse(feedbackRaw) : [];
+
+    // Calculate statistics
+    const total = feedbackList.length;
+    const correctCount = feedbackList.filter(f => f.correct).length;
+    const incorrectCount = total - correctCount;
+    const accuracy = total > 0 ? Math.round((correctCount / total) * 100) : 0;
+
+    // Group by action type
+    const byAction: Record<string, { total: number; correct: number; accuracy: number }> = {};
+    feedbackList.forEach((f) => {
+      const action = String(f.action ?? 'unknown');
+      if (!byAction[action]) {
+        byAction[action] = { total: 0, correct: 0, accuracy: 0 };
+      }
+      byAction[action]!.total++;
+      if (f.correct) byAction[action]!.correct++;
+    });
+
+    Object.keys(byAction).forEach((action) => {
+      const stats = byAction[action];
+      if (!stats) return;
+      stats.accuracy = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
+    });
+
+    return c.json({
+      success: true,
+      stats: {
+        total,
+        correct: correctCount,
+        incorrect: incorrectCount,
+        accuracy,
+        byAction,
+        recent: feedbackList.slice(-10).reverse(), // Last 10 feedback entries
+      }
+    });
+  } catch (error) {
+    return c.json({ success: false, error: String(error) }, 500);
+  }
+});
+
+
+api.post('/feedback/process', async (c) => {
+  try {
+    await updateDetectorWeights(devvitContext.subredditName);
+
+    const feedbackRaw = await redis.get(`modguard:feedback:${devvitContext.subredditName}`);
+    const feedbackList: FeedbackEntry[] = feedbackRaw ? JSON.parse(feedbackRaw) : [];
+    const correct = feedbackList.filter(f => f.correct).length;
+
+    return c.json({
+      success: true,
+      message: `Processed ${feedbackList.length} feedback entries (${correct} correct). Detector weights updated.`,
+      totalFeedback: feedbackList.length,
+      accuracy: feedbackList.length > 0 ? Math.round((correct / feedbackList.length) * 100) : 0,
+    });
+  } catch (error) {
+    return c.json({ success: false, error: String(error) }, 500);
+  }
+});
+
+api.get('/community-scan', async (c) => {
+  try {
+    const logRaw = await redis.get(`modguard:log:${devvitContext.subredditName}`);
+    const logs: LogEntry[] = logRaw ? JSON.parse(logRaw) : [];
+
+    const posts = await reddit.getUnmoderated({ subreddit: devvitContext.subredditName, type: 'post', limit: 25 });
+    const commentData = await reddit.getUnmoderated({ subreddit: devvitContext.subredditName, type: 'comment', limit: 25 });
+
+    const unmoderated: { id: string; type: string; author: string; text: string; severity: string; score: number }[] = [];
+
+    for await (const post of posts) {
+      const a = analyseContent(post.body ?? post.title, post.title);
+      unmoderated.push({ id: post.id, type: 'post', author: post.authorName, text: (post.title + ' ' + (post.body ?? '')).slice(0, 80), severity: a.severity, score: a.confidence });
+    }
+
+    for await (const cData of commentData) {
+      const a = analyseContent(cData.body);
+      unmoderated.push({ id: cData.id, type: 'comment', author: cData.authorName, text: (cData.body ?? '').slice(0, 80), severity: a.severity, score: a.confidence });
+    }
+
+    const critical = unmoderated.filter(i => i.severity === 'critical' || i.severity === 'high');
+    const pending = unmoderated.filter(i => i.severity === 'medium');
+    const safe = unmoderated.filter(i => i.severity === 'none' || i.severity === 'low');
+
+    return c.json({
+      success: true,
+      scan: {
+        total: unmoderated.length,
+        critical: { count: critical.length, items: critical.slice(0, 10) },
+        pending: { count: pending.length, items: pending.slice(0, 10) },
+        safe: { count: safe.length },
+        totalActions: logs.length,
+        autoActions: logs.filter(l => l.auto).length,
+        humanActions: logs.filter(l => !l.auto).length,
+      },
+    });
+  } catch (error) {
+    return c.json({ success: false, error: String(error) }, 500);
+  }
+});
+
+api.get('/coordinated', async (c) => {
+  try {
+    const key = `modguard:coordinated:${devvitContext.subredditName}`;
+    const raw = await redis.get(key);
+    const attacks: { timestamp: string; users: string[]; windowMinutes: number }[] = raw ? JSON.parse(raw) : [];
+    return c.json({ success: true, attacks: attacks.slice(-10) });
+  } catch {
+    return c.json({ success: true, attacks: [] });
+  }
+});

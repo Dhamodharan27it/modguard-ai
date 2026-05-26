@@ -1,7 +1,10 @@
 
+type Offender = { username: string; violations: number };
+type ActionLog = { action: string; author: string };
+
 type Props = {
-    offenders: any[];
-    recentActions: any[];
+    offenders: Offender[];
+    recentActions: ActionLog[];
   };
   
   const actionColors: Record<string, string> = {
@@ -89,7 +92,7 @@ type Props = {
             color: '#8B949E',
           }}>No actions yet</div>
         ) : (
-          recentActions.slice(0, 8).map((log: any, i: number) => (
+          recentActions.slice(0, 8).map((log: ActionLog, i: number) => (
             <div key={i} style={{
               padding: '8px 12px',
               borderBottom: '1px solid #30363D',

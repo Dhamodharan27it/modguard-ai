@@ -1,6 +1,11 @@
 
+type Stats = {
+  totalActioned: number; totalRemoved: number; totalApproved: number;
+  totalEscalated: number; totalBanned: number; autoRemoved: number; criticalAlerts: number;
+};
+
 type Props = {
-    stats: any;
+    stats: Stats | null;
   };
   
   export function StatsBar({ stats }: Props) {

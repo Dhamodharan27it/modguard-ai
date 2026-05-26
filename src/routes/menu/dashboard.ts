@@ -1,47 +1,74 @@
 import { Hono } from 'hono';
 import type { UiResponse } from '@devvit/web/shared';
-import { context as devvitContext } from '@devvit/web/server';
-import { getCommunityHealthScore, predictThreat } from '../../core/nuke';
-
+import { redis, reddit, context as devvitContext } from '@devvit/web/server';
 
 export const dashboardMenu = new Hono();
 
-// Devvit Web dashboard opening.
-// NOTE: the mod menu item currently calls /internal/menu/dashboard-blocks.
-// This endpoint returns a toast. The actual Web UI is loaded by the post created in src/routes/menu.ts.
-// If you also need a direct post-opening endpoint, create it here.
+const DASHBOARD_KEY = 'modguard:dashboard';
 
-dashboardMenu.post('/dashboard-blocks', async (c) => {
+function fullRedditUrl(path: string): string {
+  return `https://reddit.com${path}`;
+}
+
+async function getOrCreateDashboardPost(): Promise<{ id: string; permalink: string; url: string }> {
+  const key = `${DASHBOARD_KEY}:${devvitContext.subredditName}`;
+  const existingRaw = await redis.get(key);
+
+  if (existingRaw) {
+    const existing = JSON.parse(existingRaw) as { postId: string; permalink: string };
+    try {
+      const post = await reddit.getPostById(existing.postId as `t3_${string}`);
+      return { id: post.id, permalink: post.permalink, url: fullRedditUrl(post.permalink) };
+    } catch {
+      console.log('[ModGuard] Dashboard post was deleted, creating replacement');
+    }
+  }
+
+  console.log('[ModGuard] Creating dashboard post in r/', devvitContext.subredditName);
+  const post = await reddit.submitCustomPost({
+    subredditName: devvitContext.subredditName,
+    title: 'ModGuard AI Dashboard',
+    textFallback: {
+      text: 'ModGuard AI — Community Safety Operating System. Open this post on the latest Reddit app or web to view the interactive dashboard.',
+    },
+  });
+
+  const url = fullRedditUrl(post.permalink);
+  const data = { postId: post.id, permalink: post.permalink, createdAt: new Date().toISOString() };
+  await redis.set(key, JSON.stringify(data));
+  console.log('[ModGuard] Dashboard post created:', post.id, url);
+
+  return { id: post.id, permalink: post.permalink, url };
+}
+
+dashboardMenu.post('/open-dashboard', async (c) => {
+  console.log('[ModGuard] /open-dashboard: launching WebView...');
   try {
-    const subreddit = devvitContext.subredditName;
-    
-    const health = await getCommunityHealthScore(subreddit).catch(() => ({
-      score: 85,
-      grade: 'A',
-      summary: 'Healthy',
-    }));
-
-    const threat = await predictThreat(subreddit).catch(() => ({
-      threatLevel: 'low',
-      probability: 10,
-    }));
-
-    const threatEmoji =
-      threat.threatLevel === 'imminent'
-        ? '🚨'
-        : threat.threatLevel === 'high'
-          ? '⚠️'
-          : threat.threatLevel === 'elevated'
-            ? '📊'
-            : '✅';
-
+    const { url } = await getOrCreateDashboardPost();
+    console.log('[ModGuard] /open-dashboard: navigating to', url);
     return c.json<UiResponse>({
-      showToast: `📊 Dashboard Ready | Health: ${health.score}% ${health.grade} | ${threatEmoji} Threat: ${threat.threatLevel.toUpperCase()} | Mode: Top-Level Moderator Tool | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collaboration`,
+      navigateTo: { url },
     }, 200);
   } catch (error) {
+    console.error('[ModGuard] /open-dashboard error:', error);
     return c.json<UiResponse>({
-      showToast: `📊 Dashboard Ready | Mode: Top-Level Moderator Tool | Features: Queue, Insights, Threat Detection, Appeals, Watchlist, Team Collaboration`,
+      showToast: `📊 Dashboard: ${String(error).slice(0, 80)}`,
     }, 200);
   }
 });
 
+dashboardMenu.post('/dashboard-blocks', async (c) => {
+  console.log('[ModGuard] /dashboard-blocks: launching WebView...');
+  try {
+    const { url } = await getOrCreateDashboardPost();
+    console.log('[ModGuard] /dashboard-blocks: navigating to', url);
+    return c.json<UiResponse>({
+      navigateTo: { url },
+    }, 200);
+  } catch (error) {
+    console.error('[ModGuard] /dashboard-blocks error:', error);
+    return c.json<UiResponse>({
+      showToast: `📊 Dashboard: ${String(error).slice(0, 80)}`,
+    }, 200);
+  }
+});

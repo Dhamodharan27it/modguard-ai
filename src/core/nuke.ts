@@ -14,6 +14,8 @@ import {
   checkPatternSimilarity,
   isOnWatchlist,
 } from './memory';
+import { classifier } from './classifier';
+import { analyseImagesSync, ImageAnalysisResult } from './imageAnalyzer';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Severity = 'none' | 'low' | 'medium' | 'high' | 'critical';
@@ -37,18 +39,18 @@ export type AnalysisResult = {
   tier: 1 | 2 | 3 | 0;
   riskScore?: number;
   evasionDetected?: boolean;
-  // New v2 fields
   triggeredDetectors?: string[];
-  contextNote?: string | null;
+  contextNote?: string;
   falsePositiveRisk?: number;
   language?: string;
   memoryInsight?: string | null;
   decisionFactors?: string[];
   estimatedImpact?: {
     toxicityReduction: number;
-    appealProbability: 'low' | 'medium' | 'high';
+    appealProbability: string;
     falsePositiveRisk: number;
   };
+  imageAnalysis?: ImageAnalysisResult;
 };
 
 export type StrikeRecord = {
@@ -211,7 +213,7 @@ export async function analyseContentFull(
 
   const evasionDetected = pre.evasionAttempts.length > 0;
 
-  return {
+  const result: AnalysisResult = {
     category,
     violation: topDetector?.label ?? 'No Violation Detected',
     confidence: decision.confidence,
@@ -229,95 +231,89 @@ export async function analyseContentFull(
     riskScore: risk.score,
     evasionDetected,
     triggeredDetectors: pipeline.triggeredDetectors,
-    contextNote: pipeline.context.contextNote,
+    ...(pipeline.context.contextNote ? { contextNote: pipeline.context.contextNote } : {}),
     falsePositiveRisk: pipeline.context.falsePositiveRisk,
     language: pre.language,
     memoryInsight: memoryInsight?.message ?? null,
     decisionFactors: decision.decisionFactors,
     estimatedImpact: decision.estimatedImpact,
   };
+
+  // Image analysis
+  try {
+    const imageResult = analyseImagesSync(content, title);
+    if (imageResult.hasImage) {
+      result.imageAnalysis = imageResult;
+    }
+  } catch {
+    // Non-blocking
+  }
+
+  return result;
 }
 
-// ─── Sync wrapper (kept for backward compat with existing routes) ─────────────
+const CLASSIFIER_MAP: Record<string, { violation: string; severity: Severity; action: Action; rule: string; tier: 1 | 2 | 3 | 0 }> = {
+  child_safety:    { violation: 'Child Safety Violation — CRITICAL', severity: 'critical', action: 'ban', rule: 'Rule 0: Zero tolerance', tier: 1 },
+  doxxing:         { violation: 'Doxxing / Personal Information Exposure', severity: 'critical', action: 'ban', rule: 'Rule 2: No doxxing', tier: 1 },
+  dark_web:        { violation: 'Dark Web / Illegal Activity', severity: 'critical', action: 'ban', rule: 'Rule 6: No illegal activity', tier: 1 },
+  violence:        { violation: 'Direct Threat of Violence', severity: 'critical', action: 'ban', rule: 'Rule 7: No threats', tier: 1 },
+  adult_content:   { violation: 'Explicit Adult Content', severity: 'high', action: 'remove', rule: 'Rule 8: No explicit content', tier: 2 },
+  hate_speech:     { violation: 'Hate Speech / Discrimination', severity: 'high', action: 'remove', rule: 'Rule 9: No hate speech', tier: 2 },
+  harassment:      { violation: 'Harassment', severity: 'high', action: 'remove', rule: 'Rule 1: No harassment', tier: 2 },
+  drugs:           { violation: 'Drug Promotion', severity: 'high', action: 'remove', rule: 'Rule 10: No drug promotion', tier: 2 },
+  spam:            { violation: 'Spam / Self-Promotion', severity: 'medium', action: 'remove', rule: 'Rule 3: No spam', tier: 3 },
+  scam:            { violation: 'Scam / Fraud', severity: 'medium', action: 'remove', rule: 'Rule 11: No scams', tier: 3 },
+  misinformation:  { violation: 'Potential Misinformation', severity: 'medium', action: 'escalate', rule: 'Rule 4: No misinformation', tier: 3 },
+  leaked_content:  { violation: 'Leaked / Unreleased Content', severity: 'low', action: 'escalate', rule: 'Rule 5: No leaks', tier: 3 },
+  toxicity:        { violation: 'Toxic Behavior', severity: 'low', action: 'escalate', rule: 'Rule 12: Be civil', tier: 3 },
+  clean:           { violation: 'No Violation Detected', severity: 'none', action: 'approve', rule: null as unknown as string, tier: 0 },
+};
 
 export function analyseContent(content: string, title: string = ''): AnalysisResult {
-  const text = normalizeText(content + ' ' + title);
-  const original = (content + ' ' + title).toLowerCase();
-  const evasionDetected = text !== original.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = (content + ' ' + title).toLowerCase();
+  const plain = text.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const evasionDetected = plain !== text.replace(/\s+/g, ' ').trim() || /[0O5S$@]/.test(text.replace(/\s/g, ''));
 
-  // TIER 1: CRITICAL
-  const childSafetyPatterns = ['jailbait', 'preteen', 'underage girl', 'underage boy', 'child nude', 'kid nude', 'minor nude', 'cp link', 'children sex', 'kids sex', 'minor sex', 'send nudes minor', 'young girl naked', 'young boy naked'];
-  if (childSafetyPatterns.some(p => text.includes(p))) {
-    return { category: 'child_safety', violation: 'Child Safety Violation — CRITICAL', confidence: 99, severity: 'critical', suggestedAction: 'ban', rule: 'Rule 0: Zero tolerance', removalMessage: 'Removed for child safety violation.', autoAction: true, requiresImmediateAlert: true, tier: 1, evasionDetected };
+  const prediction = classifier.predict(text);
+  const predictedCat = prediction.category as keyof typeof CLASSIFIER_MAP;
+  const catInfo = (CLASSIFIER_MAP[predictedCat] ?? CLASSIFIER_MAP.clean)!;
+
+  const confidence = Math.min(99, prediction.confidence);
+
+  const autoAction = catInfo.tier <= 1 || (catInfo.tier === 2 && confidence >= 85) || (catInfo.tier === 3 && confidence >= 90) || predictedCat === 'clean';
+  const requiresImmediateAlert = catInfo.tier === 1;
+
+  const removalMessage = catInfo.action === 'approve' ? null
+    : `Removed for ${catInfo.violation.toLowerCase()}.`;
+
+  const result: AnalysisResult = {
+    category: predictedCat as Category,
+    violation: catInfo.violation,
+    confidence,
+    severity: catInfo.severity,
+    suggestedAction: catInfo.action,
+    rule: catInfo.rule,
+    removalMessage,
+    autoAction,
+    requiresImmediateAlert,
+    tier: catInfo.tier,
+    evasionDetected,
+  };
+
+  // Run image analysis (sync — URL matching only, no HEAD request)
+  try {
+    const imageResult = analyseImagesSync(content, title);
+    if (imageResult.hasImage) {
+      result.imageAnalysis = imageResult;
+      if (result.severity === 'none' && imageResult.confidence === 'definite') {
+        result.suggestedAction = 'escalate';
+      }
+    }
+  } catch {
+    // Image analysis failure should never crash the main analysis
   }
 
-  const doxxPatterns = ['home address', 'his address is', 'her address is', 'phone number is', 'social security', 'ssn is', 'passport number', 'bank account', 'credit card number', 'i know where you live', 'dox', 'leaked personal info'];
-  const doxxScore = doxxPatterns.filter(p => text.includes(p)).length;
-  if (doxxScore >= 1) {
-    return { category: 'doxxing', violation: 'Doxxing / Personal Information Exposure', confidence: Math.min(97, 85 + doxxScore * 6), severity: 'critical', suggestedAction: 'ban', rule: 'Rule 2: No doxxing', removalMessage: 'Removed for sharing personal information.', autoAction: true, requiresImmediateAlert: true, tier: 1, evasionDetected };
-  }
-
-  const darkWebPatterns = ['.onion', 'tor browser', 'dark web', 'darkweb', 'buy drugs online', 'illegal weapons', 'hitman', 'silk road', 'dream market', 'buy stolen', 'counterfeit', 'fake id', 'fake passport'];
-  const darkWebScore = darkWebPatterns.filter(p => text.includes(p)).length;
-  if (darkWebScore >= 1) {
-    return { category: 'dark_web', violation: 'Dark Web / Illegal Activity', confidence: Math.min(96, 82 + darkWebScore * 7), severity: 'critical', suggestedAction: 'ban', rule: 'Rule 6: No illegal activity', removalMessage: 'Removed for promoting illegal activities.', autoAction: true, requiresImmediateAlert: true, tier: 1, evasionDetected };
-  }
-
-  const threatPatterns = ['i will kill you', 'i will hurt you', 'you will die', 'watch your back', 'going to shoot', 'bomb threat', 'send a shooter'];
-  const threatScore = threatPatterns.filter(p => text.includes(p)).length;
-  if (threatScore >= 1) {
-    return { category: 'violence', violation: 'Direct Threat of Violence', confidence: Math.min(97, 88 + threatScore * 5), severity: 'critical', suggestedAction: 'ban', rule: 'Rule 7: No threats', removalMessage: 'Removed for threats of violence.', autoAction: true, requiresImmediateAlert: true, tier: 1, evasionDetected };
-  }
-
-  // TIER 2: HIGH
-  const adultPatterns = ['nsfw', 'explicit content', 'nude', 'naked', 'pornographic', 'xxx', 'onlyfans link', 'sexual content', 'graphic sex'];
-  const adultScore = adultPatterns.filter(p => text.includes(p)).length;
-  if (adultScore >= 2) {
-    return { category: 'adult_content', violation: 'Explicit Adult Content', confidence: Math.min(93, 75 + adultScore * 9), severity: 'high', suggestedAction: 'remove', rule: 'Rule 8: No explicit content', removalMessage: 'Removed for explicit adult content.', autoAction: true, requiresImmediateAlert: false, tier: 2, evasionDetected };
-  }
-
-  const hatePatterns = ['all ethnicity', 'all religion', 'should die', 'are subhuman', 'white supremacy', 'ethnic cleansing', 'racial slur', 'go back to your country'];
-  const hateScore = hatePatterns.filter(p => text.includes(p)).length;
-  if (hateScore >= 1) {
-    return { category: 'hate_speech', violation: 'Hate Speech / Discrimination', confidence: Math.min(94, 80 + hateScore * 7), severity: 'high', suggestedAction: 'remove', rule: 'Rule 9: No hate speech', removalMessage: 'Removed for hate speech.', autoAction: true, requiresImmediateAlert: false, tier: 2, evasionDetected };
-  }
-
-  const harassPatterns = ['you idiot', 'fuck you', 'you stupid', 'worthless', 'kill yourself', 'kys', 'you dumb', 'nobody likes you', 'you suck', 'get cancer', 'go die', 'you moron', 'loser'];
-  const harassScore = harassPatterns.filter(p => text.includes(p)).length;
-  if (harassScore >= 2) {
-    return { category: 'harassment', violation: 'Severe Harassment', confidence: Math.min(95, 75 + harassScore * 8), severity: 'high', suggestedAction: 'remove', rule: 'Rule 1: No harassment', removalMessage: 'Removed for severe harassment.', autoAction: true, requiresImmediateAlert: false, tier: 2, evasionDetected };
-  }
-
-  const drugPatterns = ['buy cocaine', 'buy heroin', 'buy meth', 'sell drugs', 'drug dealer', 'how to make meth', 'fentanyl for sale', 'buy weed online'];
-  const drugScore = drugPatterns.filter(p => text.includes(p)).length;
-  if (drugScore >= 1) {
-    return { category: 'drugs', violation: 'Drug Promotion', confidence: Math.min(92, 78 + drugScore * 7), severity: 'high', suggestedAction: 'remove', rule: 'Rule 10: No drug promotion', removalMessage: 'Removed for drug promotion.', autoAction: false, requiresImmediateAlert: false, tier: 2, evasionDetected };
-  }
-
-  // TIER 3: MEDIUM
-  const spamPatterns = ['buy now', 'click here', 'limited time offer', 'discount code', 'affiliate', 'check out my', 'follow me', 'subscribe to my', 'free money', 'earn $', 'dm me for', 'promo code'];
-  const spamScore = spamPatterns.filter(p => text.includes(p)).length;
-  if (spamScore >= 2) {
-    return { category: 'spam', violation: 'Spam / Self-Promotion', confidence: Math.min(94, 76 + spamScore * 9), severity: 'medium', suggestedAction: 'remove', rule: 'Rule 3: No spam', removalMessage: 'Removed for spam.', autoAction: false, requiresImmediateAlert: false, tier: 3, evasionDetected };
-  }
-
-  if (harassScore === 1) {
-    return { category: 'harassment', violation: 'Personal Attack', confidence: 80, severity: 'medium', suggestedAction: 'remove', rule: 'Rule 1: No harassment', removalMessage: 'Removed for violating Rule 1.', autoAction: false, requiresImmediateAlert: false, tier: 3, evasionDetected };
-  }
-
-  const misinfoPatterns = ['doctors dont want you to know', 'mainstream media is hiding', '5g causes', 'vaccines cause', 'the truth they hide', 'government is lying'];
-  const misinfoScore = misinfoPatterns.filter(p => text.includes(p)).length;
-  if (misinfoScore >= 1) {
-    return { category: 'misinformation', violation: 'Potential Misinformation', confidence: Math.min(82, 68 + misinfoScore * 7), severity: 'medium', suggestedAction: 'escalate', rule: 'Rule 4: No misinformation', removalMessage: 'Flagged for potential misinformation.', autoAction: false, requiresImmediateAlert: false, tier: 3, evasionDetected };
-  }
-
-  const leakPatterns = ['leaked', 'datamine', 'unreleased', 'before official', 'early access leak'];
-  const leakScore = leakPatterns.filter(p => text.includes(p)).length;
-  if (leakScore >= 1) {
-    return { category: 'leaked_content', violation: 'Leaked / Unreleased Content', confidence: Math.min(80, 65 + leakScore * 8), severity: 'low', suggestedAction: 'escalate', rule: 'Rule 5: No leaks', removalMessage: 'Escalated for leaked content.', autoAction: false, requiresImmediateAlert: false, tier: 3, evasionDetected };
-  }
-
-  return { category: 'clean', violation: 'No Violation Detected', confidence: 91, severity: 'none', suggestedAction: 'approve', rule: null, removalMessage: null, autoAction: false, requiresImmediateAlert: false, tier: 0, evasionDetected: false };
+  return result;
 }
 
 // ─── User Risk Score ──────────────────────────────────────────────────────────
@@ -557,8 +553,23 @@ export async function alertAllModerators(postId: string, author: string, violati
 export async function executeAutoAction(
   postId: string, author: string, analysis: AnalysisResult, isComment: boolean = false
 ) {
-  if (!analysis.autoAction) return;
   try {
+    if (analysis.suggestedAction === 'approve') {
+      const target = isComment
+        ? await reddit.getCommentById(postId as `t1_${string}`)
+        : await reddit.getPostById(postId as `t3_${string}`);
+      await target.approve();
+      await addTimelineEvent({ type: 'action', message: `Auto-approved content by u/${author}`, severity: 'info', actor: author, auto: true });
+      const logKey = `modguard:log:${devvitContext.subredditName}`;
+      const logRaw = await redis.get(logKey);
+      const logs: object[] = logRaw ? JSON.parse(logRaw) : [];
+      logs.unshift({ postId, author, action: 'auto_approved', violation: 'none', category: 'clean', severity: 'none', timestamp: new Date().toISOString(), auto: true });
+      await redis.set(logKey, JSON.stringify(logs.slice(0, 100)));
+      return;
+    }
+
+    if (!analysis.autoAction) return;
+
     if (isComment) {
       const comment = await reddit.getCommentById(postId as `t1_${string}`);
       await comment.remove();
@@ -590,7 +601,7 @@ export async function executeAutoAction(
 // ─── Re-export new engine functions for routes ────────────────────────────────
 
 export { predictThreat, getSlowModeRecommendation } from './riskEngine';
-export { generateWeeklyInsights, generateTransparencyReport, getTimeline, addTimelineEvent, getAppeals, resolveAppeal, submitAppeal, getWatchlist, addToWatchlist, getModNotes, addModNote, getCollabAlerts, createCollabAlert, getModeratorPreferences, saveModeratorPreferences } from './memory';
+export { generateWeeklyInsights, generateTransparencyReport, getTimeline, addTimelineEvent, getAppeals, resolveAppeal, submitAppeal, getWatchlist, addToWatchlist, getModNotes, addModNote, getCollabAlerts, createCollabAlert, getModeratorPreferences, saveModeratorPreferences, updateDetectorWeights, getDetectorWeights } from './memory';
 
 export type BehaviorDNA = {
   username: string;
@@ -684,6 +695,64 @@ export async function getBehaviorDNA(username: string): Promise<BehaviorDNA> {
     triggeredCategories,
     trustLevel: risk.level,
     raidLink: { coordinatedRisk, recommendedShield: coordinatedRisk >= 70 },
+  };
+}
+
+export function getAIScore(analysis: AnalysisResult, accountAgeDays: number, strikeCount: number): {
+  finalConfidence: number;
+  riskWeightedSeverity: string;
+  aiInsight: string;
+  detectionFactors: string[];
+} {
+  const factors: string[] = [];
+  let adjustedConfidence = analysis.confidence;
+
+  if (analysis.evasionDetected) {
+    adjustedConfidence = Math.min(99, adjustedConfidence + 5);
+    factors.push('Evasion patterns detected (+5)');
+  }
+
+  if (accountAgeDays <= 1) {
+    adjustedConfidence = Math.min(99, adjustedConfidence + 8);
+    factors.push('New account <1 day (+8)');
+  } else if (accountAgeDays <= 7) {
+    adjustedConfidence = Math.min(99, adjustedConfidence + 4);
+    factors.push('New account <7 days (+4)');
+  }
+
+  if (strikeCount >= 3) {
+    adjustedConfidence = Math.min(99, adjustedConfidence + 6);
+    factors.push(`Repeat offender (${strikeCount} strikes) (+6)`);
+  } else if (strikeCount >= 1) {
+    adjustedConfidence = Math.min(99, adjustedConfidence + 3);
+    factors.push(`Prior strikes (${strikeCount}) (+3)`);
+  }
+
+  let severityBoost = 0;
+  if (analysis.severity === 'critical') severityBoost = 0;
+  else if (analysis.severity === 'high') severityBoost = 1;
+  else if (analysis.severity === 'medium') severityBoost = 2;
+  else severityBoost = 4;
+
+  const effectiveSeverity = severityBoost <= 1 ? analysis.severity
+    : accountAgeDays <= 7 ? (severityBoost <= 2 ? 'high' : 'medium')
+    : analysis.severity;
+
+  let insight = '';
+  if (analysis.category === 'clean') {
+    insight = accountAgeDays <= 7 ? 'Content clean — new account flagged for monitoring'
+      : 'No violations detected — content safe';
+  } else if (analysis.evasionDetected) {
+    insight = `User attempted evasion via text obfuscation — ${analysis.violation}`;
+  } else {
+    insight = `${analysis.violation} (${adjustedConfidence}% confidence) — account is ${accountAgeDays <= 7 ? 'new (' + accountAgeDays + ' days)' : 'established (' + accountAgeDays + ' days)'}, ${strikeCount > 0 ? strikeCount + ' prior strikes' : 'clean record'}`;
+  }
+
+  return {
+    finalConfidence: Math.round(adjustedConfidence),
+    riskWeightedSeverity: effectiveSeverity,
+    aiInsight: insight,
+    detectionFactors: factors,
   };
 }
 

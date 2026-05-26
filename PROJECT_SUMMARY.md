@@ -306,6 +306,12 @@ ModGuard AI is a **complete, functional, production-grade** moderation system th
 
 ---
 
-**Document Generated:** May 15, 2026  
+**Document Generated:** May 21, 2026  
+
+## Recent Update (UI Stability)
+- Fixed the **“Removal Message - Responsive Widget”** Copy/toast logic in `src/client/App.tsx`.
+- Verified stability with `npm run build` (client + server).
+
 **Project Status:** ✅ COMPLETE & SUBMISSION-READY  
 **Build Status:** ✅ PASSING  
+

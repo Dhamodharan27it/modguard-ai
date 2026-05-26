@@ -1,0 +1,138 @@
+@keyframes mg-pulse {
+  0% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.35); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.9; }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulseGlow {
+  0% {
+    box-shadow: 0 0 0px rgba(255, 69, 0, 0);
+  }
+
+  50% {
+    box-shadow: 0 0 12px rgba(255, 69, 0, 0.35);
+  }
+
+  100% {
+    box-shadow: 0 0 0px rgba(255, 69, 0, 0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -300px 0;
+  }
+
+  100% {
+    background-position: 300px 0;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.25s ease;
+}
+
+.ai-pulse {
+  animation: pulseGlow 2s infinite;
+}
+
+.hover-lift {
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+  border-color: #ff4500 !important;
+  box-shadow: 0 4px 16px rgba(255, 69, 0, 0.15);
+}
+
+.action-btn {
+  transition:
+    all 0.15s ease,
+    transform 0.12s ease;
+}
+
+.action-btn:hover {
+  transform: scale(1.03);
+}
+
+.action-btn:active {
+  transform: scale(0.96);
+}
+
+.queue-item {
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.queue-item:hover {
+  background: #1c2128 !important;
+  transform: translateX(2px);
+}
+
+.shimmer-loading {
+  background: linear-gradient(
+    90deg,
+    #161b22 25%,
+    #1f2630 50%,
+    #161b22 75%
+  );
+
+  background-size: 400px 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+@keyframes mg-float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-3px); }
+  100% { transform: translateY(0px); }
+}
+
+@keyframes mg-borderGlow {
+  0% { border-color: #30363D; }
+  50% { border-color: #FF4500; }
+  100% { border-color: #30363D; }
+}
+
+.mg-hover-card {
+  transition: all 0.25s ease;
+}
+
+.mg-hover-card:hover {
+  transform: translateY(-3px);
+  border-color: #FF4500 !important;
+  box-shadow: 0 0 18px rgba(255,69,0,0.18);
+}
+
+.mg-button {
+  transition: all 0.2s ease;
+}
+
+.mg-button:hover {
+  transform: scale(1.03);
+  opacity: 0.95;
+}
+
+.mg-live-indicator {
+  animation: mg-pulse 1.2s infinite;
+}
+
+.mg-float {
+  animation: mg-float 3s ease-in-out infinite;
+}

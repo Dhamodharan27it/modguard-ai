@@ -1,8 +1,16 @@
 
+type QueueItem = {
+  postId: string; type: string; author: string; title?: string; content: string;
+  violation: string; confidence: number; severity: string; suggestedAction: string;
+  removalMessage: string | null; existingStrikes: number; tier: number; createdAt: string;
+  riskScore?: number; riskLevel?: string; triggeredDetectors?: string[];
+  autoDetected?: boolean; rule?: string;
+};
+
 type Props = {
-    queue: any[];
-    selected: any;
-    onSelect: (item: any) => void;
+    queue: QueueItem[];
+    selected: QueueItem | null;
+    onSelect: (item: QueueItem) => void;
     onAction: (itemId: string, action: string, author: string) => void;
   };
   
@@ -109,7 +117,7 @@ type Props = {
                     background: sc.bg,
                     border: `1px solid ${sc.border}`,
                   }}>
-                    {item.confidence}% · {item.violation?.split('/')[0].trim()}
+                    {item.confidence}% · {(item.violation?.split('/')[0] ?? '').trim()}
                   </span>
                 </div>
               );

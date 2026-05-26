@@ -19,17 +19,13 @@ export const scanMenu = new Hono();
 
 scanMenu.post('/scan-all', async (c) => {
   try {
+    let scanned = 0, removed = 0, approved = 0, escalated = 0, highRisk = 0;
+
     const posts = await reddit.getUnmoderated({
       subreddit: devvitContext.subredditName,
       type: 'post',
       limit: 10,
     });
-
-    let scanned = 0,
-      removed = 0,
-      approved = 0,
-      escalated = 0,
-      highRisk = 0;
 
     for await (const post of posts) {
       const author = post.authorName;
@@ -50,20 +46,10 @@ scanMenu.post('/scan-all', async (c) => {
       }
 
       await redis.set(`modguard:analysis:${post.id}`, JSON.stringify({
-        postId: post.id,
-        type: 'post',
-        author,
-        title: post.title,
-        content: post.body ?? post.title,
-        subreddit: post.subredditName,
-        createdAt: new Date().toISOString(),
-        existingStrikes: strikeRecord.count,
-        riskScore: riskScore.score,
-        riskLevel: riskScore.level,
-        accountAge: accountRisk.days,
-        evasionDetected: analysis.evasionDetected,
-        autoDetected: true,
-        ...analysis,
+        postId: post.id, type: 'post', author, title: post.title, content: post.body ?? post.title,
+        subreddit: post.subredditName, createdAt: new Date().toISOString(),
+        existingStrikes: strikeRecord.count, riskScore: riskScore.score, riskLevel: riskScore.level,
+        accountAge: accountRisk.days, evasionDetected: analysis.evasionDetected, autoDetected: true, ...analysis,
       }));
 
       await addToModQueue(post.id);
@@ -72,45 +58,58 @@ scanMenu.post('/scan-all', async (c) => {
       if (analysis.confidence >= 90 && analysis.suggestedAction === 'remove') {
         await post.remove();
         const { record, banInfo } = await addStrike(author, analysis.violation, analysis.category, post.id);
-
-        await reddit.sendPrivateMessage({
-          to: author,
-          subject: `Your post was removed from r/${devvitContext.subredditName}`,
-          text: `${analysis.removalMessage}\n\nStrike ${record.count}/5. Ban: ${banInfo.label}`,
-        });
-
-        if (analysis.requiresImmediateAlert || record.count >= 4) {
-          await alertAllModerators(post.id, author, analysis.violation);
-        }
-
-        await logAction({
-          itemId: post.id,
-          type: 'post',
-          action: 'auto_removed',
-          author,
-          reason: analysis.violation,
-          strikeCount: record.count,
-          banApplied: banInfo.label,
-          permanent: banInfo.permanent,
-          riskScore: riskScore.score,
-          evasionDetected: analysis.evasionDetected,
-          auto: true,
-        });
-
+        await reddit.sendPrivateMessage({ to: author, subject: `Your post was removed from r/${devvitContext.subredditName}`, text: `${analysis.removalMessage}\n\nStrike ${record.count}/5. Ban: ${banInfo.label}` });
+        if (analysis.requiresImmediateAlert || record.count >= 4) await alertAllModerators(post.id, author, analysis.violation);
+        await logAction({ itemId: post.id, type: 'post', action: 'auto_removed', author, reason: analysis.violation, strikeCount: record.count, banApplied: banInfo.label, permanent: banInfo.permanent, riskScore: riskScore.score, evasionDetected: analysis.evasionDetected, auto: true });
         removed++;
       } else if (analysis.suggestedAction === 'escalate') {
         await alertAllModerators(post.id, author, analysis.violation);
         escalated++;
       } else if (analysis.suggestedAction === 'approve') {
         await post.approve();
-        await logAction({
-          itemId: post.id,
-          type: 'post',
-          action: 'auto_approved',
-          author,
-          reason: 'No violation',
-          auto: true,
-        });
+        await logAction({ itemId: post.id, type: 'post', action: 'auto_approved', author, reason: 'No violation', auto: true });
+        approved++;
+      }
+    }
+
+    const comments = await reddit.getUnmoderated({
+      subreddit: devvitContext.subredditName,
+      type: 'comment',
+      limit: 10,
+    });
+
+    for await (const comment of comments) {
+      const author = comment.authorName;
+      const analysis = analyseContent(comment.body);
+
+      const [strikeRecord, accountRisk, riskScore] = await Promise.all([
+        getUserStrikes(author),
+        checkNewAccountRisk(author),
+        getUserRiskScore(author),
+      ]);
+
+      if (riskScore.score >= 60) highRisk++;
+
+      await redis.set(`modguard:analysis:${comment.id}`, JSON.stringify({
+        postId: comment.id, type: 'comment', author, content: comment.body,
+        subreddit: comment.subredditName, createdAt: new Date().toISOString(),
+        existingStrikes: strikeRecord.count, riskScore: riskScore.score, riskLevel: riskScore.level,
+        accountAge: accountRisk.days, evasionDetected: analysis.evasionDetected, autoDetected: true, ...analysis,
+      }));
+
+      await addToModQueue(comment.id);
+      scanned++;
+
+      if (analysis.confidence >= 90 && analysis.suggestedAction === 'remove') {
+        await comment.remove();
+        const { record, banInfo } = await addStrike(author, analysis.violation, analysis.category, comment.id);
+        await reddit.sendPrivateMessage({ to: author, subject: `Your comment was removed from r/${devvitContext.subredditName}`, text: `${analysis.removalMessage}\n\nStrike ${record.count}/5. Ban: ${banInfo.label}` });
+        if (analysis.requiresImmediateAlert || record.count >= 4) await alertAllModerators(comment.id, author, analysis.violation);
+        await logAction({ itemId: comment.id, type: 'comment', action: 'auto_removed', author, reason: analysis.violation, strikeCount: record.count, banApplied: banInfo.label, permanent: banInfo.permanent, riskScore: riskScore.score, evasionDetected: analysis.evasionDetected, auto: true });
+        removed++;
+      } else if (analysis.suggestedAction === 'approve') {
+        await comment.approve();
+        await logAction({ itemId: comment.id, type: 'comment', action: 'auto_approved', author, reason: 'No violation', auto: true });
         approved++;
       }
     }
@@ -118,7 +117,7 @@ scanMenu.post('/scan-all', async (c) => {
     const health = await getCommunityHealthScore(devvitContext.subredditName);
 
     return c.json<UiResponse>({
-      showToast: `🔍 Scan Done! ${scanned} posts | ✕${removed} removed | ✓${approved} approved | ⚠${escalated} escalated | 🔴${highRisk} high-risk | Health: ${health.score}% (${health.grade})`,
+      showToast: `🔍 Scan Done! ${scanned} items (${approved}✓ ${removed}✕ ${escalated}⚠) | 🔴${highRisk} high-risk | Health: ${health.score}% (${health.grade})`,
     }, 200);
   } catch (error) {
     console.error('[ModGuard] scan-all error:', error);

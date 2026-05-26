@@ -1,85 +1,103 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { App } from './App';
+import './animation.css';
 
-function ModGuardDashboard() {
-  const stats = [
-    { label: 'Total Actioned', value: '1,284' },
-    { label: 'Removed', value: '482' },
-    { label: 'Approved', value: '601' },
-    { label: 'Escalated', value: '74' },
-    { label: 'Banned', value: '38' },
-    { label: 'Pending Appeals', value: '17' },
-  ];
+// ─── ErrorBoundary ──────────────────────────────────────────────────────────
 
-  return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: '#0D1117',
-        color: 'white',
-        padding: '30px',
-        fontFamily: 'Arial',
-      }}
-    >
-      <h1 style={{ fontSize: '40px' }}>
-        🛡 ModGuard AI Dashboard
-      </h1>
+class DashboardErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null; info: string }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null, info: '' };
+  }
 
-      <p style={{ color: '#999', marginBottom: '30px' }}>
-        Advanced AI moderation intelligence dashboard
-      </p>
+  static getDerivedStateFromError(error: Error) {
+    return { error, info: error.message };
+  }
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))',
-          gap: '20px',
-        }}
-      >
-        {stats.map((item) => (
-          <div
-            key={item.label}
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[ModGuard WebView Error]', error, errorInfo.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          background: '#0D1117',
+          color: '#F85149',
+          fontFamily: 'monospace',
+          fontSize: 13,
+          padding: 24,
+          textAlign: 'center',
+          gap: 12,
+        }}>
+          <div style={{ fontSize: 32 }}>⚠</div>
+          <div style={{ fontWeight: 500 }}>Dashboard Render Error</div>
+          <div style={{ color: '#8B949E', fontSize: 11, maxWidth: 400, lineHeight: 1.5 }}>
+            {this.state.info.slice(0, 200)}
+          </div>
+          <button
+            onClick={() => window.location.reload()}
             style={{
-              background: '#161B22',
-              padding: '20px',
-              borderRadius: '16px',
+              marginTop: 8,
+              padding: '8px 20px',
+              borderRadius: 6,
               border: '1px solid #30363D',
+              background: '#1C2128',
+              color: '#E6EDF3',
+              fontFamily: 'monospace',
+              fontSize: 11,
+              cursor: 'pointer',
             }}
           >
-            <p style={{ color: '#999' }}>{item.label}</p>
-
-            <h2 style={{ fontSize: '32px' }}>
-              {item.value}
-            </h2>
-          </div>
-        ))}
-      </div>
-
-      <div
-        style={{
-          marginTop: '40px',
-          background: '#161B22',
-          padding: '20px',
-          borderRadius: '16px',
-          border: '1px solid #30363D',
-        }}
-      >
-        <h2>🚨 AI Moderation Active</h2>
-
-        <ul>
-          <li>✅ Threat Detection</li>
-          <li>✅ Strike System</li>
-          <li>✅ AI Analysis</li>
-          <li>✅ Appeals Queue</li>
-          <li>✅ Watchlist Monitoring</li>
-        </ul>
-      </div>
-    </div>
-  );
+            Reload Dashboard
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+// ─── Devvit WebView Bridge ─────────────────────────────────────────────────
+
+function initWebViewBridge() {
+  console.log('[ModGuard WebView] Initializing...');
+  window.addEventListener('message', (event) => {
+    try {
+      const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      if (msg.type === 'devvit-message') {
+        console.log('[ModGuard WebView] Devvit message:', msg);
+      }
+    } catch {
+      // Not a JSON message — ignore
+    }
+  });
+  // Signal to Devvit host that WebView is ready
+  console.log('[ModGuard WebView] Ready');
+}
+
+initWebViewBridge();
+
+// ─── Mount ──────────────────────────────────────────────────────────────────
+
+const rootEl = document.getElementById('root');
+if (!rootEl) {
+  throw new Error('[ModGuard] Root element #root not found');
+}
+
+ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>
-    <ModGuardDashboard />
+    <DashboardErrorBoundary>
+      <App />
+    </DashboardErrorBoundary>
   </React.StrictMode>
 );

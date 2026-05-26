@@ -318,7 +318,7 @@ export type PipelineResult = {
   aggregateScore: number;
 };
 
-export function runDetectionPipeline(pre: PreProcessedContent): PipelineResult {
+export function runDetectionPipeline(pre: PreProcessedContent, weights?: Record<string, number>): PipelineResult {
   const detectors: DetectorResult[] = [
     detectToxicity(pre),
     detectHateSpeech(pre),
@@ -339,9 +339,11 @@ export function runDetectionPipeline(pre: PreProcessedContent): PipelineResult {
   // Aggregate score: weighted average of triggered detectors, reduced by false positive risk
   let aggregateScore = 0;
   if (triggered.length > 0) {
-    const raw = triggered.reduce((sum, d) => sum + d.confidence, 0) / triggered.length;
+    const raw = triggered.reduce((sum, d) => sum + d.confidence * (weights?.[d.detector] ?? 1), 0);
+    const weightSum = triggered.reduce((sum, d) => sum + (weights?.[d.detector] ?? 1), 0);
+    const weightedAverage = weightSum > 0 ? raw / weightSum : 0;
     const fpReduction = context.falsePositiveRisk * 0.4;
-    aggregateScore = Math.max(0, Math.round(raw - fpReduction));
+    aggregateScore = Math.max(0, Math.round(weightedAverage - fpReduction));
   }
 
   return {

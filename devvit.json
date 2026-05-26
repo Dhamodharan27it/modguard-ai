@@ -118,12 +118,15 @@
   "triggers": {
     "onAppInstall": "/internal/triggers/on-app-install",
     "onPostReport": "/internal/triggers/post-reported",
-    "onCommentReport": "/internal/triggers/comment-reported"
+    "onCommentReport": "/internal/triggers/comment-reported",
+    "onPostSubmit": "/internal/triggers/post-submitted",
+    "onCommentSubmit": "/internal/triggers/comment-submitted"
   },
   "forms": {
     "mopComment": "/internal/form/mop-comment-submit",
     "mopPost": "/internal/form/mop-post-submit"
+  },
+  "marketingAssets": {
+    "icon": "assets/icon.png"
   }
-  
-  
 }

@@ -13,6 +13,7 @@ import {
   alertAllModerators,
   generateEvidenceLog,
   addTimelineEvent,
+  executeAutoAction,
 } from '../../core/nuke';
 import { addToModQueue, removeFromQueue } from '../../services/queueService';
 import { logAction } from '../../services/logService';
@@ -311,6 +312,8 @@ analyseMenu.post('/analyse-post-v2', async (c) => {
 
     await addToModQueue(postId);
 
+    await executeAutoAction(postId, author, analysis, false);
+
     await addTimelineEvent({
       type: 'detection',
       message: `Full pipeline analysis: ${analysis.violation} (${analysis.confidence}%) — u/${author}`,
@@ -322,9 +325,10 @@ analyseMenu.post('/analyse-post-v2', async (c) => {
     const contextNote = analysis.contextNote ? ` | ${analysis.contextNote}` : '';
     const memNote = analysis.memoryInsight ? ` | 🧠 ${analysis.memoryInsight}` : '';
     const langNote = analysis.language && analysis.language !== 'en' && analysis.language !== 'unknown' ? ` | Lang: ${analysis.language}` : '';
+    const actionedNote = analysis.autoAction || analysis.suggestedAction === 'approve' ? ' | ✅ Auto-actioned' : '';
 
     return c.json<UiResponse>({
-      showToast: `⚡ ${analysis.violation} (${analysis.confidence}%) | Risk: ${analysis.riskScore ?? 0}/100 | ${analysis.suggestedAction.toUpperCase()}${contextNote}${memNote}${langNote}`,
+      showToast: `⚡ ${analysis.violation} (${analysis.confidence}%) | Risk: ${analysis.riskScore ?? 0}/100 | ${analysis.suggestedAction.toUpperCase()}${contextNote}${memNote}${langNote}${actionedNote}`,
     }, 200);
   } catch (error) {
     return c.json<UiResponse>({ showToast: `Analysis v2 failed: ${String(error)}` }, 200);

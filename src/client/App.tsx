@@ -1,36 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-// ─── Animations (simple, safe) ───────────────────────────────────────────────
-function ensureKeyframes() {
-  if (typeof document === 'undefined') return;
-  const id = 'modguard-animations';
-  if (document.getElementById(id)) return;
-
-  const style = document.createElement('style');
-  style.id = id;
-  style.textContent = `
-    @keyframes mg-pulse {
-      0% { transform: scale(1); opacity: 0.95; }
-      50% { transform: scale(1.35); opacity: 1; }
-      100% { transform: scale(1); opacity: 0.9; }
-    }
-    @keyframes mg-glow {
-      0% { box-shadow: 0 0 0 rgba(255,69,0,0.0); }
-      50% { box-shadow: 0 0 18px rgba(255,69,0,0.35); }
-      100% { box-shadow: 0 0 0 rgba(255,69,0,0.0); }
-    }
-    @keyframes mg-slideIn {
-      from { transform: translateY(10px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-    .mg-anim-pulse { animation: mg-pulse 1s infinite; }
-    .mg-anim-glow { animation: mg-glow 1.5s infinite; }
-    .mg-anim-slideIn { animation: mg-slideIn 220ms ease-out both; }
-  `;
-  document.head.appendChild(style);
-}
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types 
 
 
 type AnalysisItem = {
@@ -41,6 +11,10 @@ type AnalysisItem = {
   contextNote?: string; falsePositiveRisk?: number; language?: string;
   memoryInsight?: string; decisionFactors?: string[];
   estimatedImpact?: { toxicityReduction: number; appealProbability: string; falsePositiveRisk: number };
+  imageAnalysis?: {
+    score: number; confidence: string; hasImage: boolean;
+    imageUrls?: string[]; signals?: { type: string; value: unknown }[];
+  };
 };
 
 type Stats = {
@@ -78,7 +52,7 @@ type Appeal = {
 type WatchlistEntry = { username: string; reason: string; addedAt: string };
 type CollabAlert = { id: string; type: string; message: string; targetUser?: string; createdBy: string; createdAt: string; resolved: boolean };
 
-type Tab = 'queue' | 'timeline' | 'insights' | 'appeals' | 'watchlist' | 'collab' | 'transparency';
+type Tab = 'queue' | 'timeline' | 'insights' | 'appeals' | 'watchlist' | 'collab' | 'transparency' | 'threats';
 
 // ─── Colour Palettes ──────────────────────────────────────────────────────────
 
@@ -116,6 +90,8 @@ const sectionHeader = {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export function App() {
+  const [authStatus, setAuthStatus] = useState<'loading' | 'authorized' | 'unauthorized'>('loading');
+  const [authUsername, setAuthUsername] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('queue');
   const [queue, setQueue] = useState<AnalysisItem[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -133,6 +109,27 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [noteInput, setNoteInput] = useState('');
   const [collabInput, setCollabInput] = useState('');
+  const [severityFilter, setSeverityFilter] = useState('all');
+  const [queueCounts, setQueueCounts] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    fetch('/api/auth/check')
+      .then(r => r.json())
+      .then(d => {
+        if (d.success && d.isModerator) {
+          setAuthStatus('authorized');
+          setAuthUsername(d.username);
+        } else {
+          setAuthStatus('unauthorized');
+          setAuthUsername(d.username ?? null);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        setAuthStatus('unauthorized');
+        setLoading(false);
+      });
+  }, []);
 
   function showToast(msg: string) {
     setToast(msg);
@@ -140,9 +137,10 @@ export function App() {
   }
 
   const fetchAll = useCallback(async () => {
+    if (authStatus !== 'authorized') return;
     try {
       // Fetch with fallback defaults
-      const fetchWithDefault = async (url: string, defaultValue: any) => {
+      const fetchWithDefault = async (url: string, defaultValue: unknown) => {
         try {
           const res = await fetch(url);
           if (!res.ok) return defaultValue;
@@ -152,14 +150,14 @@ export function App() {
         }
       };
 
-      const qD = await fetchWithDefault('/api/queue', { success: true, queue: [] });
+      const qD = await fetchWithDefault('/api/queue', { success: true, queue: [], counts: {} });
       const sD = await fetchWithDefault('/api/stats', { success: true, stats: { totalActioned: 0, totalRemoved: 0, totalApproved: 0, totalEscalated: 0, totalBanned: 0, autoRemoved: 0, criticalAlerts: 0, recentActions: [] } });
       const tD = await fetchWithDefault('/api/threat', { success: true, threat: { threatLevel: 'none', probability: 0, signals: [], warning: null, timeWindow: null }, slowMode: { shouldActivate: false, mode: 'none', reason: null, suggestedDurationMinutes: 0 } });
       const hD = await fetchWithDefault('/api/health', { success: true, health: { score: 85, grade: 'A', summary: 'Community healthy' }, emotional: { temperature: 50, status: 'normal', warning: null } });
       const tlD = await fetchWithDefault('/api/timeline?limit=60', { success: true, timeline: [] });
       const oD = await fetchWithDefault('/api/offenders', { success: true, offenders: [] });
 
-      if (qD.success) { setQueue(qD.queue ?? []); if (!selected && qD.queue?.length > 0) setSelected(qD.queue[0]); }
+      if (qD.success) { setQueue(qD.queue ?? []); setQueueCounts(qD.counts ?? {}); if (!selected && qD.queue?.length > 0) setSelected(qD.queue[0]); }
       if (sD.success) setStats(sD.stats);
       if (tD.success) setThreat(tD);
       if (hD.success) setHealthData(hD);
@@ -167,7 +165,7 @@ export function App() {
       if (oD.success) setOffenders(oD.offenders ?? []);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [selected]);
+  }, [selected, authStatus]);
 
   const fetchTabData = useCallback(async (t: Tab) => {
     try {
@@ -198,6 +196,12 @@ export function App() {
         } catch {
           setWatchlist([]);
         }
+      } else if (t === 'threats') {
+        try {
+          const tR = await fetch('/api/threat').then(r => r.json());
+          await fetch('/api/coordinated').then(r => r.json()).catch(() => ({ success: true, attacks: [] }));
+          if (tR.success && tR.threat) setThreat(tR);
+        } catch { /* ignore */ }
       } else if (t === 'collab') {
         try {
           const r = await fetch('/api/collab');
@@ -215,21 +219,23 @@ export function App() {
     if (!selected || acting) return;
     setActing(true);
     try {
-      let endpoint = '';
-      let body: Record<string, string> = { itemId: selected.postId, action, author: selected.author };
-      if (action === 'approve') endpoint = '/internal/menu/approve-post';
-      else if (action === 'remove') endpoint = '/internal/menu/remove-post';
-      else if (action === 'escalate') endpoint = '/internal/menu/escalate-post';
-      else if (action === 'ban') endpoint = '/internal/menu/ban-user';
-      if (action !== 'ban') body = { ...body, postId: selected.postId, reason: selected.removalMessage ?? selected.violation };
-      else body = { ...body, username: selected.author, reason: selected.violation, days: '0' };
+      // Consolidate into a single API call that handles both Reddit actions and internal logging
+      const body = {
+        itemId: selected.postId,
+        action,
+        author: selected.author,
+        reason: selected.removalMessage ?? selected.violation,
+        type: selected.type
+      };
+
+      const res = await fetch('/api/resolve', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify(body) 
+      });
+      const actionData = await res.json();
       
-      const actionRes = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const actionData = await actionRes.json();
-      
-      await fetch('/api/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itemId: selected.postId, action, author: selected.author, reason: selected.violation }) });
-      
-      showToast(actionData.showToast || `✅ ${action.toUpperCase()} completed for u/${selected.author}`);
+      showToast(actionData.message || `✅ ${action.toUpperCase()} completed for u/${selected.author}`);
       setSelected(null);
       await fetchAll();
     } catch (e) { 
@@ -266,18 +272,18 @@ export function App() {
     await fetchTabData('collab');
   }
 
-  useEffect(() => {
-    ensureKeyframes();
-  }, []);
-
-  useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 30000); return () => clearInterval(iv); }, [fetchAll]);
-  useEffect(() => { fetchTabData(tab); }, [tab, fetchTabData]);
+  useEffect(() => { fetchAll().catch(console.error); const iv = setInterval(() => fetchAll().catch(console.error), 30000); return () => clearInterval(iv); }, [fetchAll]);
+  useEffect(() => { fetchTabData(tab).catch(console.error); }, [tab, fetchTabData]);
 
 
-  if (loading) {
+  if (authStatus === 'unauthorized') {
+    return <UnauthorizedAccess username={authUsername} />;
+  }
+
+  if (authStatus === 'loading' || loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0D1117', color: '#FF4500', fontFamily: 'monospace', fontSize: 14, gap: 10 }}>
-        <span style={{ fontSize: 20 }}>⚡</span> Loading ModGuard AI...
+      <div className="fade-in" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0D1117', color: '#FF4500', fontFamily: 'monospace', fontSize: 14, gap: 10 }}>
+        <span className="mg-float" style={{ fontSize: 20 }}>⚡</span> Loading ModGuard AI...
       </div>
     );
   }
@@ -289,7 +295,7 @@ export function App() {
 
       {/* Toast */}
       {toast && (
-        <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#161B22', border: '1px solid #30363D', borderRadius: 8, padding: '10px 20px', fontSize: 13, color: '#E6EDF3', zIndex: 999, whiteSpace: 'nowrap' }}>
+        <div className="fade-in mg-float" style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: '#161B22', border: '1px solid #30363D', borderRadius: 8, padding: '10px 20px', fontSize: 13, color: '#E6EDF3', zIndex: 999, whiteSpace: 'nowrap' }}>
           {toast}
         </div>
       )}
@@ -304,8 +310,8 @@ export function App() {
 
         {/* Threat indicator */}
         {threat && threat.threat.threatLevel !== 'none' && (
-          <div className="mg-anim-glow" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: threatColor, background: '#1C2128', border: `1px solid ${threatColor}44`, borderRadius: 6, padding: '3px 8px' }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: threatColor }} className="mg-anim-pulse" />
+          <div className="mg-hover-card" style={{ marginLeft: 12, display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: threatColor, background: '#1C2128', border: `1px solid ${threatColor}44`, borderRadius: 6, padding: '3px 8px' }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: threatColor }} className="mg-live-indicator" />
             THREAT: {threat.threat.threatLevel.toUpperCase()} ({threat.threat.probability}%)
           </div>
         )}
@@ -341,8 +347,8 @@ export function App() {
           { label: 'AUTO', value: stats?.autoRemoved ?? 0, color: '#FF4500' },
           { label: 'CRITICAL', value: stats?.criticalAlerts ?? 0, color: '#F85149' },
           { label: 'APPEALS', value: appeals.filter(a => a.status === 'pending').length, color: '#58A6FF' },
-        ].map(s => (
-          <div key={s.label} style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: 8, padding: '5px 8px', textAlign: 'center' }}>
+        ].map((s, idx) => (
+          <div key={s.label} className="hover-lift" style={{ background: '#0D1117', border: '1px solid #30363D', borderRadius: 8, padding: '5px 8px', textAlign: 'center', animationDelay: `${idx * 60}ms` }}>
             <div style={{ fontSize: 17, fontWeight: 500, color: s.color }}>{s.value}</div>
             <div style={{ fontSize: 9, color: '#8B949E', marginTop: 2 }}>{s.label}</div>
           </div>
@@ -370,6 +376,7 @@ export function App() {
           { id: 'appeals', label: '⚖ Appeals' },
           { id: 'watchlist', label: '👁 Watchlist' },
           { id: 'collab', label: '💬 Team' },
+          { id: 'threats', label: '🚨 Threats' },
           { id: 'transparency', label: '🔍 Transparency' },
         ] as { id: Tab; label: string }[]).map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -383,12 +390,13 @@ export function App() {
 
       {/* Body */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
-        {tab === 'queue' && <QueueTab queue={queue} selected={selected} setSelected={setSelected} stats={stats} offenders={offenders} acting={acting} noteInput={noteInput} setNoteInput={setNoteInput} onAction={handleAction} onAddNote={handleAddNote} onWatchlist={handleAddToWatchlist} />}
+        {tab === 'queue' && <QueueTab queue={queue} selected={selected} setSelected={setSelected} stats={stats} offenders={offenders} acting={acting} noteInput={noteInput} setNoteInput={setNoteInput} onAction={handleAction} onAddNote={handleAddNote} onWatchlist={handleAddToWatchlist} severityFilter={severityFilter} setSeverityFilter={setSeverityFilter} queueCounts={queueCounts} />}
         {tab === 'timeline' && <TimelineTab events={timeline} />}
         {tab === 'insights' && <InsightsTab insights={insights} />}
         {tab === 'appeals' && <AppealsTab appeals={appeals} onResolve={handleResolveAppeal} />}
         {tab === 'watchlist' && <WatchlistTab watchlist={watchlist} />}
         {tab === 'collab' && <CollabTab alerts={collab} input={collabInput} setInput={setCollabInput} onPost={handleCollabPost} />}
+        {tab === 'threats' && <ThreatTab threat={threat} healthData={healthData} timeline={timeline} />}
         {tab === 'transparency' && <TransparencyTab subreddit="" />}
       </div>
     </div>
@@ -397,13 +405,78 @@ export function App() {
 
 // ─── Queue Tab ────────────────────────────────────────────────────────────────
 
-function QueueTab({ queue, selected, setSelected, stats, offenders, acting, noteInput, setNoteInput, onAction, onAddNote, onWatchlist }: {
+function QueueTab({ queue, selected, setSelected, stats, offenders, acting, noteInput, setNoteInput, onAction, onAddNote, onWatchlist, severityFilter, setSeverityFilter, queueCounts }: {
   queue: AnalysisItem[]; selected: AnalysisItem | null; setSelected: (i: AnalysisItem) => void;
   stats: Stats | null; offenders: { username: string; violations: number }[];
   acting: boolean; noteInput: string; setNoteInput: (v: string) => void;
   onAction: (a: string) => void; onAddNote: () => void; onWatchlist: () => void;
+  severityFilter: string; setSeverityFilter: (s: string) => void; queueCounts: Record<string, number>;
 }) {
+  const filteredQueue = severityFilter === 'all' ? queue : queue.filter(i => i.severity === severityFilter);
   const sc = SEV[selected?.severity ?? 'none'] ?? SEV['none']!;
+  
+  // Behavioral DNA state
+  const [dna, setDna] = useState<{
+    dnaScore: number; riskPrediction48h: { probability: number; label: string };
+    peakRiskBand: string; patternTrajectory: { from: string; to: string; trend: string };
+    triggerWords: string[]; evasionAttempts: number; triggeredCategories: string[];
+    trustLevel: string; raidLink: { coordinatedRisk: number; recommendedShield: boolean };
+  } | null>(null);
+
+  useEffect(() => {
+    if (!selected) { setDna(null); return; }
+    fetch(`/api/dna/${selected.author}`)
+      .then(r => r.json())
+      .then(data => { if (data.success) setDna(data.dna); })
+      .catch(() => setDna(null));
+  }, [selected]);
+
+  // Feedback state
+  const [showFeedbackNote, setShowFeedbackNote] = useState(false);
+  const [feedbackNote, setFeedbackNote] = useState('');
+
+  // Submit feedback functions
+  const submitFeedback = async (correct: boolean) => {
+    if (!selected) return;
+    
+    setShowFeedbackNote(true);
+    // Store the correctness in a temporary variable for use in submitFeedbackWithNote
+    (globalThis as { [key: string]: unknown }).tempFeedbackCorrect = correct;
+  };
+
+  const submitFeedbackWithNote = async () => {
+    if (!selected) return;
+    
+    try {
+      const correct = (globalThis as { [key: string]: unknown }).tempFeedbackCorrect || false;
+      await fetch(`/api/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemId: selected.postId,
+          action: selected.suggestedAction,
+          correct,
+          note: feedbackNote,
+          username: 'moderator' // In a real app, this would come from auth
+        })
+      });
+      
+      setShowFeedbackNote(false);
+      setFeedbackNote('');
+      
+      // Show thank you message for 3 seconds
+      setThankYou(true);
+      setTimeout(() => setThankYou(false), 3000);
+      
+      // Clean up temp variable
+      delete (globalThis as { [key: string]: unknown }).tempFeedbackCorrect;
+    } catch (error) {
+      console.error('Failed to submit feedback:', error);
+    }
+  };
+
+  // Thank you message state
+  const [, setThankYou] = useState(false);
 
   return (
     <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -411,16 +484,26 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
       {/* Queue List */}
       <div style={{ width: 210, borderRight: '1px solid #30363D', overflow: 'auto', background: '#161B22', flexShrink: 0 }}>
         <div style={sectionHeader}>MOD QUEUE ({queue.length})</div>
-        {queue.length === 0 ? (
+        <div style={{ display: 'flex', gap: 2, padding: '4px 6px', borderBottom: '1px solid #30363D', flexWrap: 'wrap' }}>
+          {['all', 'critical', 'high', 'medium', 'low', 'none'].map(s => (
+            <button key={s} onClick={() => setSeverityFilter(s)} style={{
+              padding: '2px 6px', fontSize: 8, fontFamily: 'monospace', cursor: 'pointer', borderRadius: 4,
+              background: severityFilter === s ? (s === 'critical' ? '#3D1A1A' : s === 'high' ? '#3D1A1A' : s === 'medium' ? '#3D2E0A' : '#1C2128') : 'transparent',
+              color: severityFilter === s ? (s === 'critical' ? '#F85149' : s === 'high' ? '#F85149' : s === 'medium' ? '#D29922' : '#FF4500') : '#8B949E',
+              border: `1px solid ${severityFilter === s ? (s === 'critical' || s === 'high' ? '#F8514944' : s === 'medium' ? '#D2992244' : '#FF450044') : '#30363D'}`,
+            }}>{s === 'all' ? `ALL ${queue.length}` : `${s.toUpperCase()} ${queueCounts[s] ?? 0}`}</button>
+          ))}
+        </div>
+        {filteredQueue.length === 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 16px', gap: 8 }}>
             <div style={{ fontSize: 24 }}>✓</div>
             <div style={{ fontSize: 12, color: '#3FB950' }}>Queue cleared!</div>
           </div>
-        ) : queue.map(item => {
+        ) : filteredQueue.map(item => {
           const isc = SEV[item.severity] ?? SEV['none']!;
           const isActive = selected?.postId === item.postId;
           return (
-            <div key={item.postId} className="mg-anim-slideIn" onClick={() => setSelected(item)} style={{ padding: '9px 12px', borderBottom: '1px solid #30363D', borderLeft: `2px solid ${isActive ? '#FF4500' : 'transparent'}`, background: isActive ? '#1C2128' : 'transparent', cursor: 'pointer' }}>
+            <div key={item.postId} className="fade-in queue-item" onClick={() => setSelected(item)} style={{ padding: '9px 12px', borderBottom: '1px solid #30363D', borderLeft: `2px solid ${isActive ? '#FF4500' : 'transparent'}`, background: isActive ? '#1C2128' : 'transparent', cursor: 'pointer' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                 <div style={{ fontSize: 11, color: '#FF4500', fontWeight: 500 }}>{item.author}</div>
                 {item.existingStrikes > 0 && (
@@ -492,6 +575,46 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
                 {selected.memoryInsight && (
                   <div style={{ fontSize: 10, color: '#BC8CFF', marginTop: 4 }}>🧠 {selected.memoryInsight}</div>
                 )}
+                {dna && (
+                  <div style={{ marginTop: 8, padding: '6px', background: '#1C2128', borderRadius: 4, border: '1px solid #30363D' }}>
+                     <div style={{ fontSize: 8, color: '#8B949E', marginBottom: 2 }}>🧬 AI BEHAVIORAL DNA</div>
+                     <div style={{ fontSize: 10, color: '#58A6FF' }}>
+                       Score: <span style={{ color: '#E6EDF3' }}>{dna.dnaScore}/1000</span> ·
+                       Risk 48h: <span style={{ color: dna.riskPrediction48h.label === 'high' ? '#F85149' : '#D29922' }}>{dna.riskPrediction48h.label}</span> ·
+                       Peak: <span style={{ color: '#E6EDF3' }}>{dna.peakRiskBand}</span>
+                     </div>
+                     <div style={{ fontSize: 10, color: '#58A6FF', marginTop: 2 }}>
+                       Trajectory: <span style={{ color: '#E6EDF3' }}>{dna.patternTrajectory.from} → {dna.patternTrajectory.to}</span> ·
+                       Trend: <span style={{ color: dna.patternTrajectory.trend === 'rising' ? '#F85149' : '#3FB950' }}>{dna.patternTrajectory.trend}</span> ·
+                       Trust: <span style={{ color: '#D29922' }}>{dna.trustLevel}</span>
+                     </div>
+                     {dna.raidLink.recommendedShield && (
+                       <div style={{ fontSize: 9, color: '#FF4500', marginTop: 3 }}>⚠ Coordinated activity detected — shield recommended</div>
+                     )}
+                   </div>
+                )}
+                {selected.imageAnalysis?.hasImage && (
+                  <div style={{ marginTop: 8, padding: '6px', background: '#1C2128', borderRadius: 4, border: '1px solid #30363D' }}>
+                     <div style={{ fontSize: 8, color: '#8B949E', marginBottom: 2 }}>🖼 IMAGE ANALYSIS</div>
+                     <div style={{ fontSize: 10, color: '#58A6FF' }}>
+                       Score: <span style={{ color: '#E6EDF3' }}>{selected.imageAnalysis.score}/100</span> ·
+                       Confidence: <span style={{ color: selected.imageAnalysis.confidence === 'definite' ? '#3FB950' : selected.imageAnalysis.confidence === 'likely' ? '#D29922' : '#8B949E' }}>{selected.imageAnalysis.confidence.toUpperCase()}</span>
+                       {selected.imageAnalysis.imageUrls && selected.imageAnalysis.imageUrls.length > 0 && (
+                         <> · URLs: <span style={{ color: '#E6EDF3' }}>{selected.imageAnalysis.imageUrls.length}</span></>
+                       )}
+                     </div>
+                     {selected.imageAnalysis.signals && selected.imageAnalysis.signals.length > 0 && (
+                       <div style={{ fontSize: 9, color: '#8B949E', marginTop: 3 }}>
+                         {selected.imageAnalysis.signals.slice(0, 4).map((s, i) => (
+                           <span key={i} style={{ background: '#161B22', padding: '1px 5px', borderRadius: 3, marginRight: 4 }}>
+                             {s.type}: {String(s.value).slice(0, 20)}
+                           </span>
+                         ))}
+                         {selected.imageAnalysis.signals.length > 4 && <span>+{selected.imageAnalysis.signals.length - 4} more</span>}
+                       </div>
+                     )}
+                  </div>
+                )}
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
                 <div style={{ fontSize: 26, fontWeight: 500, color: sc.color }}>{selected.confidence}%</div>
@@ -530,27 +653,7 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
             {/* Content */}
             <div style={card({ fontSize: 12, lineHeight: 1.7 })}>{selected.content}</div>
 
-            {/* Removal Message - Responsive Widget */}
-            {selected.removalMessage && (
-              <div>
-                <div style={{ fontSize: 9, color: '#8B949E', letterSpacing: 1.5, marginBottom: 5 }}>🔔 USER NOTIFICATION MESSAGE</div>
-                <div style={{ 
-                  background: '#1C2128', 
-                  border: '1px solid #30363D', 
-                  borderRadius: 8, 
-                  padding: '12px 13px', 
-                  fontSize: 11, 
-                  color: '#E6EDF3', 
-                  lineHeight: 1.6,
-                  wordWrap: 'break-word',
-                  overflowWrap: 'break-word',
-                  maxHeight: 'auto',
-                  minHeight: '40px'
-                }}>
-                  {selected.removalMessage}
-                </div>
-              </div>
-            )}
+
 
             {/* Mod Note Input */}
             <div style={{ display: 'flex', gap: 6 }}>
@@ -584,6 +687,30 @@ function QueueTab({ queue, selected, setSelected, stats, offenders, acting, note
                 );
               })}
             </div>
+            
+            {/* Feedback Buttons */}
+            {selected && !acting && (
+              <div style={{ display: 'flex', gap: 6, marginTop: 10, paddingTop: 10, borderTop: '1px solid #30363D' }}>
+                <button onClick={() => submitFeedback(true)} style={{ flex: 1, padding: '8px 4px', borderRadius: 6, fontSize: 10, cursor: 'pointer', background: '#1A3D1A', border: '1px solid #3FB950', color: '#3FB950', fontFamily: 'monospace' }}>✅ Correct</button>
+                <button onClick={() => submitFeedback(false)} style={{ flex: 1, padding: '8px 4px', borderRadius: 6, fontSize: 10, cursor: 'pointer', background: '#3D1A1A', border: '1px solid #F85149', color: '#F85149', fontFamily: 'monospace' }}>❌ Wrong</button>
+              </div>
+            )}
+            
+            {/* Feedback Note Input */}
+            {showFeedbackNote && (
+              <div style={{ marginTop: 10 }}>
+                <textarea
+                  value={feedbackNote}
+                  onChange={e => setFeedbackNote(e.target.value)}
+                  placeholder="Please explain why this action was correct/incorrect..."
+                  style={{ width: '100%', minHeight: 60, background: '#161B22', border: '1px solid #30363D', borderRadius: 6, padding: '8px 12px', fontSize: 11, color: '#E6EDF3', fontFamily: 'monospace', outline: 'none', resize: 'vertical' }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6 }}>
+                  <button onClick={() => submitFeedbackWithNote()} style={{ padding: '6px 12px', borderRadius: 6, fontSize: 10, cursor: 'pointer', background: '#FF4500', border: 'none', color: '#fff', fontFamily: 'monospace', fontWeight: 500 }}>Submit Feedback</button>
+                  <button onClick={() => setShowFeedbackNote(false)} style={{ padding: '6px 12px', borderRadius: 6, fontSize: 10, cursor: 'pointer', background: '#161B22', border: '1px solid #30363D', color: '#8B949E', fontFamily: 'monospace' }}>Cancel</button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -807,17 +934,109 @@ function CollabTab({ alerts, input, setInput, onPost }: { alerts: CollabAlert[];
   );
 }
 
-// ─── Transparency Tab ─────────────────────────────────────────────────────────
+// ─── Threat Tab ───────────────────────────────────────────────────────────────
 
+function ThreatTab({ threat, healthData, timeline }: { threat: ThreatData | null; healthData: HealthData | null; timeline: TimelineEvent[] }) {
+  const tl = threat?.threat;
+  const sm = threat?.slowMode;
+  const color = tl ? THREAT_COLOR[tl.threatLevel] ?? '#3FB950' : '#3FB950';
+
+  const threatEvents = timeline.filter(e => e.type === 'threat' || e.type === 'alert');
+  const threatColor = tl?.threatLevel === 'imminent' ? '#FF4500' : tl?.threatLevel === 'high' ? '#F85149' : tl?.threatLevel === 'elevated' ? '#D29922' : '#3FB950';
+
+  return (
+    <div style={{ flex: 1, overflow: 'auto', padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>Threat Monitoring Center</div>
+        <div className={`mg-live-indicator`} style={{ width: 8, height: 8, borderRadius: '50%', background: threatColor }} />
+        <div style={{ fontSize: 10, color: threatColor, textTransform: 'uppercase' }}>{tl?.threatLevel ?? 'none'} · {tl?.probability ?? 0}% probability</div>
+      </div>
+
+      {/* Threat level gauge */}
+      <div className="fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        <div className="mg-hover-card" style={{ ...card(), textAlign: 'center', borderColor: `${color}44` }}>
+          <div style={{ fontSize: 28, fontWeight: 600, color }}>{(tl?.probability ?? 0)}%</div>
+          <div style={{ fontSize: 9, color: '#8B949E', marginTop: 4 }}>ATTACK PROBABILITY</div>
+        </div>
+        <div className="mg-hover-card" style={{ ...card(), textAlign: 'center', borderColor: `${color}44` }}>
+          <div style={{ fontSize: 28, fontWeight: 600, color: color }}>{tl?.threatLevel?.toUpperCase() ?? 'NONE'}</div>
+          <div style={{ fontSize: 9, color: '#8B949E', marginTop: 4 }}>THREAT LEVEL</div>
+        </div>
+        <div className="mg-hover-card" style={{ ...card(), textAlign: 'center', borderColor: '#58A6FF44' }}>
+          <div style={{ fontSize: 28, fontWeight: 600, color: '#58A6FF' }}>{healthData?.emotional.temperature ?? 50}°</div>
+          <div style={{ fontSize: 9, color: '#8B949E', marginTop: 4 }}>EMOTIONAL TEMP</div>
+        </div>
+      </div>
+
+      {/* Warning */}
+      {tl?.warning && (
+        <div className="mg-hover-card" style={{ ...card({ borderColor: `${color}66`, background: '#3D1A1A' }) }}>
+          <div style={{ fontSize: 10, color: '#8B949E', letterSpacing: 1, marginBottom: 6 }}>ACTIVE WARNING</div>
+          <div style={{ fontSize: 12, color }}>{tl.warning}</div>
+          {tl.timeWindow && <div style={{ fontSize: 10, color: '#D29922', marginTop: 4 }}>⏱ Time window: {tl.timeWindow}</div>}
+        </div>
+      )}
+
+      {/* Signals */}
+      <div className="mg-hover-card" style={card()}>
+        <div style={{ fontSize: 10, color: '#8B949E', letterSpacing: 1, marginBottom: 8 }}>DETECTED SIGNALS</div>
+        {(!tl?.signals || tl.signals.length === 0) ? (
+          <div style={{ fontSize: 11, color: '#3FB950' }}>✅ No threat signals detected</div>
+        ) : tl.signals.map((s, i) => (
+          <div key={i} className="fade-in" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: i < tl.signals.length - 1 ? '1px solid #21262D' : 'none' }}>
+            <span style={{ color: '#F85149' }}>⚠</span>
+            <span style={{ fontSize: 11, color: '#E6EDF3' }}>{s}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Slow mode recommendation */}
+      {sm?.shouldActivate && (
+        <div className="mg-hover-card" style={{ ...card({ borderColor: '#D2992266' }) }}>
+          <div style={{ fontSize: 10, color: '#8B949E', letterSpacing: 1, marginBottom: 8 }}>SLOW MODE RECOMMENDATION</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12, color: '#D29922', fontWeight: 500 }}>🐢 {sm.mode.toUpperCase()}</span>
+            <span style={{ fontSize: 10, color: '#8B949E' }}>for {sm.suggestedDurationMinutes} minutes</span>
+          </div>
+          {sm.reason && <div style={{ fontSize: 11, color: '#E6EDF3', marginTop: 6 }}>{sm.reason}</div>}
+        </div>
+      )}
+
+      {/* Recent threat events */}
+      <div className="mg-hover-card" style={card()}>
+        <div style={{ fontSize: 10, color: '#8B949E', letterSpacing: 1, marginBottom: 8 }}>RECENT THREAT EVENTS</div>
+        {threatEvents.length === 0 ? (
+          <div style={{ fontSize: 11, color: '#8B949E' }}>No recent threat events</div>
+        ) : threatEvents.slice(0, 10).map((e, i) => (
+          <div key={i} className="fade-in" style={{ display: 'flex', gap: 10, padding: '6px 0', borderBottom: i < Math.min(9, threatEvents.length - 1) ? '1px solid #21262D' : 'none', alignItems: 'center' }}>
+            <div style={{ fontSize: 10, color: '#8B949E', flexShrink: 0, width: 50 }}>{new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+            <div style={{ fontSize: 11, color: e.severity === 'critical' ? '#F85149' : '#D29922' }}>{e.message}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: 16, fontSize: 9, color: '#8B949E' }}>
+        <span><span style={{ color: '#3FB950' }}>●</span> None / Low</span>
+        <span><span style={{ color: '#D29922' }}>●</span> Elevated</span>
+        <span><span style={{ color: '#F85149' }}>●</span> High</span>
+        <span><span style={{ color: '#FF4500' }}>●</span> Imminent</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Transparency Tab ─────────────────────────────────────────────────────────
 function TransparencyTab({ subreddit }: { subreddit: string }) {
   const [report, setReport] = useState<{
     totalActions: number; autoActions: number; humanActions: number;
     falsePositiveRate: number; appealSuccessRate: number; moderationAccuracy: number;
     avgConfidence: number; topCategories: { category: string; count: number }[];
+    feedbackAccuracy: number; totalFeedback: number; feedbackByAction: Record<string, { total: number; correct: number; accuracy: number }>;
   } | null>(null);
 
   useEffect(() => {
-    fetch('/api/transparency').then(r => r.json()).then(d => { if (d.success) setReport(d.report); });
+    fetch('/api/transparency').then(r => r.json()).then(d => { if (d.success) setReport(d.report); }).catch(() => {});
   }, [subreddit]);
 
   if (!report) return <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8B949E', fontSize: 12 }}>Loading transparency report...</div>;
@@ -835,6 +1054,7 @@ function TransparencyTab({ subreddit }: { subreddit: string }) {
           { label: 'Avg Confidence', value: `${report.avgConfidence}%`, color: '#58A6FF' },
           { label: 'False Positive Rate', value: `${report.falsePositiveRate}%`, color: report.falsePositiveRate > 10 ? '#F85149' : '#3FB950' },
           { label: 'Appeal Success Rate', value: `${report.appealSuccessRate}%`, color: '#D29922' },
+          { label: 'Feedback Accuracy', value: `${report.feedbackAccuracy}%`, color: report.feedbackAccuracy >= 80 ? '#3FB950' : report.feedbackAccuracy >= 60 ? '#D29922' : '#F85149' },
         ].map(s => (
           <div key={s.label} style={card({ textAlign: 'center' })}>
             <div style={{ fontSize: 22, fontWeight: 500, color: s.color }}>{s.value}</div>
@@ -843,7 +1063,7 @@ function TransparencyTab({ subreddit }: { subreddit: string }) {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
         <div style={card()}>
           <div style={{ fontSize: 10, color: '#8B949E', letterSpacing: 1, marginBottom: 10 }}>ACTION BREAKDOWN</div>
           {[
@@ -872,6 +1092,19 @@ function TransparencyTab({ subreddit }: { subreddit: string }) {
       </div>
 
       <div style={card()}>
+        <div style={{ fontSize: 10, color: '#8B949E', letterSpacing: 1, marginBottom: 10 }}>FEEDBACK METRICS</div>
+        <div style={{ fontSize: 11, color: '#E6EDF3', marginBottom: 6 }}>
+          Total Feedback: {report.totalFeedback}
+        </div>
+        {Object.entries(report.feedbackByAction).map(([action, stats]) => (
+          <div key={action} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#E6EDF3', marginBottom: 4 }}>
+            <span>{action.toUpperCase()}: </span>
+            <span>{stats.correct}/{stats.total} ({stats.accuracy}%)</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={card()}>
         <div style={{ fontSize: 10, color: '#8B949E', letterSpacing: 1, marginBottom: 8 }}>ETHICAL AI COMMITMENTS</div>
         {[
           '✅ Every removal generates a full evidence log',
@@ -880,9 +1113,40 @@ function TransparencyTab({ subreddit }: { subreddit: string }) {
           '✅ Context analysis reduces sarcasm/gaming false positives',
           '✅ Human moderators review all borderline cases',
           '✅ Transparency metrics updated in real time',
+          '✅ Moderator feedback used to improve AI accuracy',
         ].map((c, i) => (
           <div key={i} style={{ fontSize: 11, color: '#E6EDF3', marginBottom: 5, lineHeight: 1.5 }}>{c}</div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Unauthorized Access ──────────────────────────────────────────────────────────
+
+function UnauthorizedAccess({ username }: { username: string | null }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0D1117', fontFamily: 'monospace', color: '#E6EDF3', padding: 32 }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>
+        <span role="img" aria-label="lock">🔒</span>
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 600, color: '#F85149', letterSpacing: 1, marginBottom: 12 }}>
+        UNAUTHORIZED ACCESS
+      </div>
+      <div style={{ fontSize: 13, color: '#8B949E', marginBottom: 8, textAlign: 'center', maxWidth: 400, lineHeight: 1.6 }}>
+        You do not have permission to access ModGuard AI.
+      </div>
+      <div style={{ fontSize: 11, color: '#8B949E', textAlign: 'center', maxWidth: 420, lineHeight: 1.6, marginBottom: 20 }}>
+        This dashboard is only available to moderators of this subreddit.
+        If you believe this is an error, please contact the subreddit moderators.
+      </div>
+      {username && (
+        <div style={{ fontSize: 11, color: '#D29922', marginBottom: 24, padding: '6px 14px', borderRadius: 6, background: '#3D2E0A', border: '1px solid #D2992244' }}>
+          Logged in as <span style={{ color: '#E6EDF3', fontWeight: 500 }}>u/{username}</span>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, fontSize: 9, color: '#30363D', marginTop: 8 }}>
+        <span>ModGuard AI · Community Safety OS</span>
       </div>
     </div>
   );

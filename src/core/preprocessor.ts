@@ -105,7 +105,9 @@ export function detectEvasion(original: string, _normalised: string): string[] {
   }
 
   // Unicode lookalikes
-  if (/[^\x00-\x7F]/.test(original) && !/[\u4E00-\u9FFF\u0900-\u097F\u0600-\u06FF\u3040-\u30FF\uAC00-\uD7AF]/.test(original)) {
+  const hasNonAscii = [...original].some(ch => ch.codePointAt(0)! > 127);
+  const isScript = (re: RegExp) => re.test(original);
+  if (hasNonAscii && !isScript(/[\u4E00-\u9FFF]/) && !isScript(/[\u0900-\u097F]/) && !isScript(/[\u0600-\u06FF]/) && !isScript(/[\u3040-\u30FF]/) && !isScript(/[\uAC00-\uD7AF]/)) {
     attempts.push('unicode_substitution');
   }
 

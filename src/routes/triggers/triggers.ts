@@ -8,6 +8,10 @@ import {
 
 type JsonRecord = Record<string, unknown>;
 
+type LogEntry = {
+  action: string; auto?: boolean; severity?: string; author?: string; timestamp?: string;
+};
+
 function extractPostIdFromTrigger(body: JsonRecord): string | undefined {
   if (typeof body.postId === 'string') return body.postId;
   const pr = body.postReport as JsonRecord | undefined;
@@ -68,9 +72,7 @@ triggers.post('/post-reported', async (c) => {
 
     await addToModQueue(postId);
 
-    if (analysis.autoAction) {
-      await executeAutoAction(postId, author, analysis, false);
-    }
+    await executeAutoAction(postId, author, analysis, false);
 
     return c.json({ success: true, analysis });
   } catch (error) {
@@ -111,9 +113,7 @@ triggers.post('/comment-reported', async (c) => {
 
     await addToModQueue(commentId);
 
-    if (analysis.autoAction) {
-      await executeAutoAction(commentId, author, analysis, true);
-    }
+    await executeAutoAction(commentId, author, analysis, true);
 
     return c.json({ success: true, analysis });
   } catch (error) {
@@ -143,7 +143,7 @@ triggers.get('/queue', async (c) => {
 triggers.get('/stats', async (c) => {
   try {
     const logRaw = await redis.get(`modguard:log:${devvitContext.subredditName}`);
-    const logs: any[] = logRaw ? JSON.parse(logRaw) : [];
+    const logs: LogEntry[] = logRaw ? JSON.parse(logRaw) : [];
 
     return c.json({
       success: true,
@@ -157,6 +157,80 @@ triggers.get('/stats', async (c) => {
         recentActions: logs.slice(0, 10),
       },
     });
+  } catch (error) {
+    return c.json({ success: false, error: String(error) }, 500);
+  }
+});
+
+triggers.post('/comment-submitted', async (c) => {
+  const body = (await c.req.json()) as JsonRecord;
+  const rawId = extractCommentIdFromTrigger(body);
+  if (!rawId) {
+    console.error('[ModGuard] comment-submitted: missing comment id', JSON.stringify(body));
+    return c.json({ success: false, error: 'missing comment id' }, 400);
+  }
+  const commentId = toCommentFullname(rawId);
+
+  try {
+    const comment = await reddit.getCommentById(commentId);
+    const author = comment.authorName;
+    const strikeRecord = await getUserStrikes(author);
+    const analysis = analyseContent(comment.body);
+
+    await redis.set(
+      `modguard:analysis:${commentId}`,
+      JSON.stringify({
+        postId: commentId, type: 'comment', author,
+        content: comment.body,
+        subreddit: comment.subredditName,
+        createdAt: new Date().toISOString(),
+        autoDetected: true, existingStrikes: strikeRecord.count,
+        ...analysis,
+      })
+    );
+
+    await addToModQueue(commentId);
+
+    await executeAutoAction(commentId, author, analysis, true);
+
+    return c.json({ success: true, analysis, autoActioned: analysis.autoAction || analysis.suggestedAction === 'approve' });
+  } catch (error) {
+    return c.json({ success: false, error: String(error) }, 500);
+  }
+});
+
+triggers.post('/post-submitted', async (c) => {
+  const body = (await c.req.json()) as JsonRecord;
+  const rawId = extractPostIdFromTrigger(body);
+  if (!rawId) {
+    console.error('[ModGuard] post-submitted: missing post id', JSON.stringify(body));
+    return c.json({ success: false, error: 'missing post id' }, 400);
+  }
+  const postId = toPostFullname(rawId);
+
+  try {
+    const post = await reddit.getPostById(postId);
+    const author = post.authorName;
+    const strikeRecord = await getUserStrikes(author);
+    const analysis = analyseContent(post.body ?? post.title, post.title);
+
+    await redis.set(
+      `modguard:analysis:${postId}`,
+      JSON.stringify({
+        postId, type: 'post', author, title: post.title,
+        content: post.body ?? post.title,
+        subreddit: post.subredditName,
+        createdAt: new Date().toISOString(),
+        autoDetected: true, existingStrikes: strikeRecord.count,
+        ...analysis,
+      })
+    );
+
+    await addToModQueue(postId);
+
+    await executeAutoAction(postId, author, analysis, false);
+
+    return c.json({ success: true, analysis, autoActioned: true });
   } catch (error) {
     return c.json({ success: false, error: String(error) }, 500);
   }
@@ -176,17 +250,21 @@ triggers.post('/on-app-install', async (c) => {
     const mods = await reddit.getModerators({ subredditName: devvitContext.subredditName });
 
     for await (const mod of mods) {
-      await reddit.sendPrivateMessage({
-        to: mod.username,
-        subject: `\u26a1 ModGuard AI installed in r/${devvitContext.subredditName}`,
-        text:
-          `ModGuard AI has been successfully installed!\n\n` +
-          `\u2705 AI violation detection active\n` +
-          `\u2705 Strike system enabled\n` +
-          `\u2705 Child safety protection on\n` +
-          `\u2705 Auto-removal for critical violations\n\n` +
-          `Your community is now protected by ModGuard AI.`,
-      });
+      try {
+        await reddit.sendPrivateMessage({
+          to: mod.username,
+          subject: `\u26a1 ModGuard AI installed in r/${devvitContext.subredditName}`,
+          text:
+            `ModGuard AI has been successfully installed!\n\n` +
+            `\u2705 AI violation detection active\n` +
+            `\u2705 Strike system enabled\n` +
+            `\u2705 Child safety protection on\n` +
+            `\u2705 Auto-removal for critical violations\n\n` +
+            `Your community is now protected by ModGuard AI.`,
+        });
+      } catch {
+        // Non-fatal: some users block DMs
+      }
     }
 
     return c.json({ success: true });
